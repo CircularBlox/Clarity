@@ -1,11 +1,3 @@
-# Keeps GitHub's traffic numbers past their 14 days. Once a day it fetches clones, views and
-# referring sites and merges them into history.csv on the `traffic` branch, with a TRAFFIC.md
-# summary. Installs and updates clone the repo, so unique cloners is the closest count of
-# people installing clarity (your own clones and catalogue scanners are in it too).
-#
-# Needs a secret named TRAFFIC_TOKEN: a fine-grained token for this repo alone, with
-# Administration set to read-only (GitHub's traffic API asks for that permission).
-
 name: Record traffic
 
 on:
