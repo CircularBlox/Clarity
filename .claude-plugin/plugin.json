@@ -1,0 +1,18 @@
+{
+  "name": "clarity",
+  "version": "0.4.0",
+  "description": "A clearer Claude Code terminal: boxed and organized you/claude conversations, colour-coded clickable tool rows, a live status band with a timer and task info, a session panel, copy buttons, cards, alerts, readable palettes, and overall transforms Claude Code.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "CircularBlox"
+  },
+  "license": "MIT",
+  "keywords": [
+    "claude-code-mod",
+    "claude-code-mods",
+    "theme",
+    "readability",
+    "accessibility"
+  ],
+  "repository": "https://github.com/CircularBlox/Clarity"
+}
