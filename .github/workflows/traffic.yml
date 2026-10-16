@@ -1,0 +1,112 @@
+# Keeps GitHub's traffic numbers past their 14 days. Once a day it fetches clones, views and
+# referring sites and merges them into history.csv on the `traffic` branch, with a TRAFFIC.md
+# summary. Installs and updates clone the repo, so unique cloners is the closest count of
+# people installing clarity (your own clones and catalogue scanners are in it too).
+#
+# Needs a secret named TRAFFIC_TOKEN: a fine-grained token for this repo alone, with
+# Administration set to read-only (GitHub's traffic API asks for that permission).
+
+name: Record traffic
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Switch to the traffic branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin traffic >/dev/null; then
+            git switch traffic
+          else
+            git switch --orphan traffic
+            git rm -rf --quiet . || true
+          fi
+
+      - name: Fetch the last 14 days
+        env:
+          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+        run: |
+          gh api "repos/${{ github.repository }}/traffic/clones" > /tmp/clones.json
+          gh api "repos/${{ github.repository }}/traffic/views" > /tmp/views.json
+          gh api "repos/${{ github.repository }}/traffic/popular/referrers" > /tmp/referrers.json
+
+      - name: Merge into the history
+        run: |
+          python3 - <<'EOF'
+          import csv, json, os
+
+          rows = {}
+          if os.path.exists('history.csv'):
+              with open('history.csv') as f:
+                  for r in csv.DictReader(f):
+                      rows[r['date']] = r
+
+          def merge(path, count_key, unique_key):
+              for day in json.load(open(path)).get(path.split('/')[-1][:-5], []):
+                  date = day['timestamp'][:10]
+                  r = rows.setdefault(date, {'date': date, 'clones': 0, 'unique_cloners': 0, 'views': 0, 'unique_visitors': 0})
+                  # GitHub's latest figure for a day replaces what was recorded before.
+                  r[count_key] = day['count']
+                  r[unique_key] = day['uniques']
+
+          merge('/tmp/clones.json', 'clones', 'unique_cloners')
+          merge('/tmp/views.json', 'views', 'unique_visitors')
+
+          fields = ['date', 'clones', 'unique_cloners', 'views', 'unique_visitors']
+          with open('history.csv', 'w', newline='') as f:
+              w = csv.DictWriter(f, fieldnames=fields)
+              w.writeheader()
+              for date in sorted(rows):
+                  w.writerow({k: rows[date].get(k, 0) for k in fields})
+
+          days = [rows[d] for d in sorted(rows)]
+          total = lambda key, ds: sum(int(d.get(key, 0)) for d in ds)
+          recent = days[-14:]
+          referrers = json.load(open('/tmp/referrers.json'))
+          lines = [
+              '# clarity traffic',
+              '',
+              f'Recorded since {days[0]["date"] if days else "today"}. Updated {sorted(rows)[-1] if rows else "today"}.',
+              '',
+              '| | All recorded days | Last 14 days |',
+              '| --- | --- | --- |',
+              f'| Clones | {total("clones", days)} | {total("clones", recent)} |',
+              f'| Unique cloners, summed by day | {total("unique_cloners", days)} | {total("unique_cloners", recent)} |',
+              f'| Views | {total("views", days)} | {total("views", recent)} |',
+              f'| Unique visitors, summed by day | {total("unique_visitors", days)} | {total("unique_visitors", recent)} |',
+              '',
+              'Unique counts are summed day by day, so someone who cloned on two days counts twice.',
+              '',
+              '## Where visitors came from (last 14 days)',
+              '',
+              '| Site | Views | Unique |',
+              '| --- | --- | --- |',
+              *[f'| {r["referrer"]} | {r["count"]} | {r["uniques"]} |' for r in referrers],
+          ]
+          if not referrers:
+              lines.append('| none yet | | |')
+          open('TRAFFIC.md', 'w').write('\n'.join(lines) + '\n')
+          EOF
+
+      - name: Save
+        run: |
+          git add history.csv TRAFFIC.md
+          if git diff --cached --quiet; then
+            echo "No change today."
+          else
+            git commit -m "Record traffic for $(date -u +%F)"
+            git push origin traffic
+          fi
