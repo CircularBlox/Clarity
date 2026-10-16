@@ -90,8 +90,8 @@ These previews are drawn from clarity's own output, rendered through Claude Code
 | Questions | A banner, so you notice Claude is waiting on you. |
 | Slash commands | Their output sits in a titled card. |
 | End of a turn | A rule with the time. After a turn over 45 seconds, a "While you were away" card with tool calls, files changed and failures. |
-| Status band | What Claude is doing, for how long, tokens written, the plan step, running agents, failures and context. It shows compaction with a timer, and warns once a plan usage limit passes 80%, with when it resets. Facts that do not fit drop out whole. |
-| Session panel | Now, context and cost, the plan, changed files, failures, recent calls and your prompts. Click a prompt to copy it. |
+| Status band | What Claude is doing, for how long, tokens written, the plan step, running agents, failures and context. It shows compaction with a timer, waits for your permission like it waits for your answers, and warns once a plan usage limit passes 80%, with when it resets. A turn that stops on an error says why, in red. During a long turn a short tip sits under it. Facts that do not fit drop out whole. |
+| Session panel | Now, context and cost, the plan, changed files, failures, recent calls and your prompts. Click a prompt to copy it. Past eight prompts the list folds, with a button to show them all. A fast scroll glides instead of jumping. |
 
 Buttons are always in brackets, like `[ ⧉ copy ]`, and change when you point at them. Coloured words without brackets are labels.
 
@@ -102,6 +102,7 @@ Buttons are always in brackets, like `[ ⧉ copy ]`, and change when you point a
 | General | clarity | on, off |
 | General | focus | on, off |
 | Look | colours | auto, dark, contrast, colorblind, theme |
+| Look | symbols | unicode, ascii |
 | Look | line width | 70, 80, 100, 120, full |
 | Look | terminal font | leave, readable, large |
 | Look | tool rows | one line, full |
@@ -109,6 +110,8 @@ Buttons are always in brackets, like `[ ⧉ copy ]`, and change when you point a
 | Layout | session panel | auto, off, open now |
 | Behaviour | alerts | notify, sound, both, off |
 | Behaviour | copy buttons | on, off |
+
+`symbols: ascii` swaps every symbol clarity draws (`▸`, `✓`, rounded borders) for plain ASCII, for terminals or fonts that show boxes instead.
 
 `auto` colours follow your Claude Code theme. `colorblind` uses the Okabe–Ito set. `theme` uses only your theme's own colours, which suits light themes.
 

@@ -11,7 +11,10 @@ import {
   drawnByMod,
   editorSettingsPath,
   editDelta,
+  DEFAULT_PREFS as PREFS,
   fillActivity,
+  tipAt,
+  toAscii,
   foldText,
   nearestLimit,
   fillLedger,
@@ -128,6 +131,7 @@ describe('logic', () => {
     expect(written['git.autofetch']).toBe(true)
     expect(written['terminal.integrated.fontSize']).toBe(13)
     expect(written['terminal.integrated.fontFamily']).toContain('JetBrains Mono')
+    expect(written['terminal.integrated.smoothScrolling']).toBe(true)
     const again = applyFont(set.text, 'readable')
     expect('isChanged' in again && again.isChanged).toBe(false)
     const back = applyFont(set.text, 'leave')
@@ -167,6 +171,14 @@ describe('logic', () => {
   test('the usage limit nearest to running out is the one shown', async () => {
     expect(nearestLimit([])).toBe(null)
     expect(nearestLimit([{ percentUsed: 40 }, { percentUsed: 91, resetsAt: '2026-10-16T02:30:00Z' }])).toEqual({ percent: 91, resetsAt: '2026-10-16T02:30:00Z' })
+  })
+
+  test('symbols have plain ASCII stand-ins, and tips rotate during a long turn', async () => {
+    expect(toAscii('▸ Read ✓ · ━━ 42s ↓ 8.5k tokens')).toBe('> Read + - == 42s v 8.5k tokens')
+    expect(toAscii('plain text stays')).toBe('plain text stays')
+    expect(tipAt(3000)).toBe(null)
+    expect(tipAt(7000)).toBe('Esc stops Claude at any point.')
+    expect(tipAt(17000)).toBe('Type @ in your prompt to add a file.')
   })
 
   test('edits add up per file', async () => {
@@ -618,6 +630,127 @@ describe('menu, band and panel', () => {
     expect(await ui.find({ text: /Your prompts/ })).toBeDefined()
     expect(await ui.find({ text: /Nothing asked yet/ })).toBeDefined()
     expect(await ui.find({ text: /No files changed yet/ })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
+describe('beta 2 and 3', () => {
+  const band = { hasSurvey: false, isWorking: true, maxRows: 6, bodyColumns: 110, scroll: { offset: 0, bodyRows: 6 }, view: {} }
+
+  test('a compaction shows in the band and ends with a toast of what it freed', async ($, on) => {
+    mock.store(on)
+    mock.clock(on)
+    const toasts: string[] = []
+    on('ui.toast', (_$, e) => {
+      toasts.push(JSON.stringify(e))
+      return { value: undefined } as never
+    })
+    // Every phase clarity writes while the compaction runs.
+    const phases: string[] = []
+    on('state.set', { plugin: 'clarity', key: 'activity' }, ($, e, next) => {
+      phases.push(String((e as { value?: { phase?: string } }).value?.phase))
+      return next(e)
+    })
+    on('session.compact', (_$, e) => ({ messages: e.messages }))
+    await $.session.compact({ messages: [{ role: 'user', text: 'hi', toolUses: [] }] } as never)
+    expect(phases).toEqual(['compacting', 'idle'])
+    expect(toasts.some(t => /compacted in \d+s/.test(t))).toBe(true)
+  })
+
+  test('a permission prompt marks Claude as waiting on you and raises an alert', async ($, on) => {
+    mock.store(on)
+    const notes: string[] = []
+    on('ui.notify', (_$, e) => {
+      notes.push(JSON.stringify(e))
+      return { value: { isSent: true, channel: 'test' } } as never
+    })
+    on('tool.check', () => ({ decision: 'ask' as const }))
+    engineDraws(on, 'AbovePrompt', '')
+    const verdict = await $.tool.check({ tool: 'Bash', command: 'rm -rf build' } as never)
+    expect(verdict.decision).toBe('ask')
+    const ui = await $.ui.mount({ plugin: 'clarity', surface: 'terminal', component: 'AbovePrompt', viewport: VIEW, props: band })
+    expect(await ui.find({ text: /Waiting for you/ })).toBeDefined()
+    await ui.unmount()
+    expect(notes.some(n => /permission: Bash rm -rf build/.test(n))).toBe(true)
+  })
+
+  test('a turn that died on an error says why in red until the next turn', async ($, on) => {
+    engineDraws(on, 'AbovePrompt', '')
+    const ledger = { ...EMPTY_LEDGER, stopped: 'usage limit reached · resets 8:30 pm' }
+    on('state.get', { plugin: 'clarity', key: 'ledger' }, () => ({ value: { value: ledger, version: 1 } }))
+    const ui = await $.ui.mount({ plugin: 'clarity', surface: 'terminal', component: 'AbovePrompt', viewport: VIEW, props: { ...band, isWorking: false } })
+    expect(await ui.find({ text: /Stopped: usage limit reached · resets 8:30 pm/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a long turn shows a tip under the band', async ($, on) => {
+    engineDraws(on, 'AbovePrompt', '')
+    on('state.get', { plugin: 'clarity', key: 'activity' }, () => ({ value: { value: { phase: 'thinking' as const, tool: '', detail: '', since: 1000, tokens: 0 }, version: 1 } }))
+    on('state.get', { plugin: 'clarity', key: 'tick' }, () => ({ value: { value: 9000, version: 1 } }))
+    const ui = await $.ui.mount({ plugin: 'clarity', surface: 'terminal', component: 'AbovePrompt', viewport: VIEW, props: band })
+    expect(await ui.find({ text: /Tip: Esc stops Claude at any point\./ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('ASCII symbols swap every symbol clarity draws, borders too', async ($, on) => {
+    on('state.get', { plugin: 'clarity', key: 'prefs' }, () => ({ value: { value: { ...PREFS, icons: 'ascii' as const }, version: 1 } }))
+    engineDraws(on, 'ToolUse', 'engine row')
+    engineDraws(on, 'UserMessage', 'engine prompt')
+    const row = await $.ui.mount({
+      plugin: 'clarity',
+      surface: 'terminal',
+      component: 'ToolUse',
+      viewport: VIEW,
+      props: { tool_use_id: 'a1', tool: 'Read', input: { file_path: '/repo/src/app.ts' }, isRunning: false, isErrored: false, isInterrupted: false },
+    })
+    expect(await row.find({ text: /^ *> +Read +src\/app\.ts +\+/ })).toBeDefined()
+    expect(await row.find({ text: /[▸✓]/ })).toBeUndefined()
+    await row.unmount()
+    const prompt = await $.ui.mount({
+      plugin: 'clarity',
+      surface: 'terminal',
+      component: 'UserMessage',
+      viewport: VIEW,
+      props: { text: 'hi', origin: { kind: 'composer' }, isExpanded: false },
+    })
+    expect(await prompt.drawn()).toMatchObject({ type: 'Box', props: { borderStyle: 'classic' } })
+    await prompt.unmount()
+  })
+
+  test('the panel folds a long prompt list, and its button shows them all', async ($, on) => {
+    mock.store(on)
+    const turns = Array.from({ length: 12 }, (_, i) => `prompt ${i + 1}`)
+    const ledger = { ...EMPTY_LEDGER, turns, prompts: turns }
+    on('state.get', { plugin: 'clarity', key: 'ledger' }, () => ({ value: { value: ledger, version: 1 } }))
+    const ui = await $.ui.mount({
+      plugin: 'clarity',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'clarity-session',
+      viewport: VIEW,
+      props: PANE_PROPS('Session'),
+    })
+    expect(await ui.find({ text: /prompt 12/ })).toBeDefined()
+    expect(await ui.find({ text: /prompt 3$/ })).toBeUndefined()
+    expect(await ui.find({ text: /show all 12/ })).toBeDefined()
+    await ui.press({ key: 'all-turns' })
+    expect(await ui.find({ text: /prompt 3$/ })).toBeDefined()
+    expect(await ui.find({ text: /show fewer/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the menu has the symbols setting', async ($, on) => {
+    mock.store(on)
+    const ui = await $.ui.mount({
+      plugin: 'clarity',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'clarity-menu',
+      viewport: VIEW,
+      props: PANE_PROPS('clarity'),
+    })
+    expect(await ui.find({ key: 'icons-ascii' })).toBeDefined()
+    expect(await ui.find({ text: /Plain ASCII for terminals/ })).toBeDefined()
     await ui.unmount()
   })
 })

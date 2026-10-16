@@ -4,6 +4,7 @@ import type { EngineInterface, Register, RenderElement, RenderInput } from 'clau
 import type { Activity, Env, FontChoice, Ledger, Prefs, RunPlace, ToolRun } from '../types'
 import {
   ALERTS,
+  ICONS,
   ASKS,
   FONTS,
   DEFAULT_PREFS,
@@ -18,6 +19,7 @@ import {
   PANELS,
   WIDTHS,
   activityText,
+  tipAt,
   applyFont,
   clip,
   describeInput,
@@ -29,6 +31,7 @@ import {
   fillActivity,
   fillLedger,
   firstLine,
+  formatClock,
   foldText,
   groupTools,
   lineCount,
@@ -51,6 +54,7 @@ import {
   card,
   failHeader,
   attachmentCards,
+  asciiUI,
   awayCard,
   menu,
   openedRow,
@@ -102,6 +106,12 @@ const LONG_TURN_MS = 45_000
 const COPY_LINES = 4
 
 let hasWarnedCramped = false
+// Plain ASCII symbols, as the last prefs read said; every drawing reads the prefs first.
+let isAscii = false
+// A pane gliding to where a fast scroll asked, a couple of rows a frame.
+let glide: { id: string; at: number; to: number } | null = null
+let glideTimer: ReturnType<EngineInterface['clock']['every']> | undefined
+const GLIDE_STEP = 2
 // Ticks the band's timer while a turn runs.
 let ticker: ReturnType<EngineInterface['clock']['every']> | undefined
 // The run the next tool call joins: set by a call, ended by any text the model writes.
@@ -123,12 +133,14 @@ async function look($: EngineInterface, e: RenderInput): Promise<Look | null> {
       `clarity: only ${columns} columns to draw in. Move the terminal into the editor area, or close a side pane, for easier reading.`,
     )
   }
+  isAscii = prefs.icons === 'ascii'
   return { prefs, colors: palettes[resolvePalette(prefs.palette, env.theme)], columns, isNarrow: columns < NARROW }
 }
 
 function elements($: EngineInterface, e: RenderInput): UI {
   // look() has already returned null off the terminal.
-  return $.ui.resolve(e) as unknown as UI
+  const ui = $.ui.resolve(e) as unknown as UI
+  return isAscii ? asciiUI(ui) : ui
 }
 
 // Writes the prefs, keeps them for later sessions and redraws every row clarity draws.
@@ -294,6 +306,11 @@ export const register: Register = on => {
     const prefs = readPrefs(await $.store.get(STORE_KEY))
     // An older clarity pinned a status line; nothing here sets one now.
     $.ui.status(undefined)
+    // The first session after installing says where the settings are, once.
+    if ((await $.store.get('welcomed')) !== true) {
+      await $.store.set('welcomed', true)
+      $.ui.toast('clarity is on. /clarity opens its settings; /clarity off turns it off.')
+    }
     let theme = 'dark'
     try {
       const value = (await $.config.list()).find(row => row.key === 'theme')?.value
@@ -346,6 +363,7 @@ export const register: Register = on => {
       await update($, tickAtom, () => now)
       const ledger = await readLedger($)
       turnStart = { tools: toolCount, errors: ledger.errors.length, files: ledger.files }
+      if (ledger.stopped !== null) await editLedger($, l => ({ ...l, stopped: null }))
       currentRun = null
       ticker?.cancel()
       ticker = $.clock.every(1000, () => void $.clock.now().then(t => update($, tickAtom, () => t)))
@@ -388,6 +406,18 @@ export const register: Register = on => {
       yield chunk
     }
   })
+
+  // A permission prompt: the verdict passes through untouched; the band says Claude is waiting
+  // on you, and an alert goes out, as for a question.
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+    if (verdict.decision === 'ask' && e.agentId === undefined) {
+      const tool = String(e.tool)
+      await editActivity($, (a): Activity => ({ ...a, phase: 'waiting', tool, detail: describeInput(tool, e) }))
+      void alert($, `Claude needs your permission: ${tool} ${describeInput(tool, e)}`.trim())
+    }
+    return verdict
+  }).catch(($, e, next) => next(e))
 
   on('tool.call', async ($, e, next) => {
     const isMain = e.agentId === undefined
@@ -489,6 +519,13 @@ export const register: Register = on => {
         }
       })
       await refreshContext($)
+      if (e.reason === 'error') {
+        const { limit } = await readLedger($)
+        const resets = limit?.resetsAt != null && !Number.isNaN(Date.parse(limit.resetsAt)) ? ` · resets ${formatClock(Date.parse(limit.resetsAt))}` : ''
+        const why = limit !== null && limit.percent >= 100 ? `usage limit reached${resets}` : firstLine(reply, 80) || 'the turn ended on an error'
+        await editLedger($, l => ({ ...l, stopped: why }))
+        void alert($, `Claude stopped: ${why}`)
+      }
       if ('durationMs' in e && e.durationMs > LONG_TURN_MS) void alert($, `Done: ${firstLine(reply, 100) || 'the turn finished'}`)
     }
     return result
@@ -501,6 +538,7 @@ export const register: Register = on => {
     if (e.surface !== 'terminal') return <ui.Text>Open the clarity menu in the terminal.</ui.Text>
     const prefs = await read($, prefsAtom)
     const env = await read($, envAtom)
+    isAscii = prefs.icons === 'ascii'
     const l: Look = {
       prefs,
       colors: palettes[resolvePalette(prefs.palette, env.theme)],
@@ -530,6 +568,15 @@ export const register: Register = on => {
         settings: [
           { key: 'palette', hotkey: '3', label: 'colours', hint: 'Auto matches your Claude Code theme.', options: choices(PALETTES), current: prefs.palette, pick: v => save({ palette: v as Prefs['palette'] }) },
           { key: 'width', hotkey: '4', label: 'line width', hint: 'How wide replies get before they wrap.', options: choices([...WIDTHS].sort((a, b) => (a || 999) - (b || 999)), v => (v === 0 ? 'full' : String(v))), current: String(prefs.measure), pick: v => save({ measure: Number(v) }) },
+          {
+            key: 'icons',
+            hotkey: 'i',
+            label: 'symbols',
+            hint: 'Plain ASCII for terminals or fonts without these symbols.',
+            options: ICONS.map(v => ({ value: v, label: v })),
+            current: prefs.icons,
+            pick: v => save({ icons: v === 'ascii' ? 'ascii' : 'unicode' }),
+          },
           {
             key: 'font',
             hotkey: 'f',
@@ -601,12 +648,51 @@ export const register: Register = on => {
     if (e.surface !== 'terminal') return <ui.Text>The session panel draws in the terminal.</ui.Text>
     const prefs = await read($, prefsAtom)
     const env = await read($, envAtom)
+    isAscii = prefs.icons === 'ascii'
     const l: Look = { prefs, colors: palettes[resolvePalette(prefs.palette, env.theme)], columns: e.props.bodyColumns, isNarrow: false }
     const ledger = await readLedger($)
+    const allTurns = memberOf(expandedAtom, { requestId: 'clarity-panel-all-turns' })
     return panel(elements($, e), l, await readActivity($), ledger, e.props.bodyColumns, {
       copyTurn: i => copyText($, e, ledger.prompts[i] ?? ledger.turns[i] ?? ''),
+      toggleTurns: () => void update($, allTurns, v => !v),
+      isAllTurns: await read($, allTurns),
     })
   })
+
+  // A fast scroll in clarity's panes glides there a couple of rows a frame instead of jumping.
+  // Each frame is a scroll of clarity's own (origin plugin), which this hook steers to the next row.
+  on('ui.scroll', { component: 'Pane' }, ($, e, next) => {
+    if (e.requestId !== MENU && e.requestId !== PANEL) return next(e)
+    const last = Math.max(0, e.contentRows - e.bodyRows)
+    if (e.origin.kind === 'plugin') {
+      if (glide === null || glide.id !== e.requestId) return next(e)
+      const left = glide.to - glide.at
+      glide.at += Math.sign(left) * Math.min(GLIDE_STEP, Math.abs(left))
+      const offset = glide.at
+      if (glide.at === glide.to) {
+        glide = null
+        glideTimer?.cancel()
+        glideTimer = undefined
+      }
+      return next({ ...e, offset })
+    }
+    const from = glide !== null && glide.id === e.requestId ? glide.at : Math.min(last, Math.max(0, e.offset - e.by))
+    const to = Math.min(last, Math.max(0, (glide !== null && glide.id === e.requestId ? glide.to : from) + e.by))
+    if (Math.abs(to - from) <= GLIDE_STEP) {
+      glide = null
+      glideTimer?.cancel()
+      glideTimer = undefined
+      return next({ ...e, offset: to })
+    }
+    glide = { id: e.requestId, at: from + Math.sign(to - from) * GLIDE_STEP, to }
+    if (glideTimer === undefined) {
+      const id = e.requestId
+      glideTimer = $.clock.every(16, () => {
+        if (glide !== null) void $.ui.scroll({ in: id, to: 'start' }).catch(() => undefined)
+      })
+    }
+    return next({ ...e, offset: glide.at })
+  }).catch(($, e, next) => next(e))
 
   // --- The band above the prompt ---
 
@@ -616,12 +702,13 @@ export const register: Register = on => {
     if (!prefs.isOn || !prefs.band) return next(e)
     const below = await next(e)
     const env = await read($, envAtom)
+    isAscii = prefs.icons === 'ascii'
     const l: Look = { prefs, colors: palettes[resolvePalette(prefs.palette, env.theme)], columns: e.props.bodyColumns, isNarrow: false }
     const ui = elements($, e)
     const ledger = await readLedger($)
     const activity = await readActivity($)
     const elapsed = activity.phase === 'idle' || activity.since === 0 ? 0 : Math.max(0, (await read($, tickAtom)) - activity.since)
-    const ours = band(ui, l, activity, ledger, e.props.bodyColumns, { elapsedMs: elapsed, tokens: activity.tokens }, {
+    const ours = band(ui, l, activity, ledger, e.props.bodyColumns, { elapsedMs: elapsed, tokens: activity.tokens, tip: activity.phase === 'compacting' ? null : tipAt(elapsed) }, {
       panel: () => void openPanel($),
       menu: () => void toggleMenu($),
       copy: prefs.copy && ledger.lastReply !== '' ? () => copyText($, e, ledger.lastReply) : undefined,
