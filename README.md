@@ -115,7 +115,7 @@ Buttons are always in brackets, like `[ ⧉ copy ]`, and change when you point a
 
 `auto` colours follow your Claude Code theme. `colorblind` uses the Okabe–Ito set. `theme` uses only your theme's own colours, which suits light themes.
 
-`terminal font` sets your editor's terminal (Cursor or VS Code) to JetBrains Mono: 13 with 1.3 line spacing for `readable`, 14 with 1.35 for `large`, and turns on smooth scrolling. It falls back to Menlo when JetBrains Mono is missing. `leave` is the default and touches nothing.
+`terminal font` sets your editor's terminal (Cursor or VS Code) to JetBrains Mono: 13 with 1.3 line spacing for `readable`, 14 with 1.35 for `large`, and turns on the terminal's smooth scrolling. That applies in Claude Code's main-screen layout; in fullscreen, Claude Code scrolls the transcript itself. It falls back to Menlo when JetBrains Mono is missing. `leave` is the default and touches nothing.
 
 Settings are kept between sessions.
 

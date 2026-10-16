@@ -324,6 +324,10 @@ export const register: Register = on => {
     // Opened unasked, the pane waits until the terminal is wide enough to dock it.
     if (prefs.isOn && prefs.panel === 'auto') void openPanel($, false)
     if (prefs.font !== 'leave') void syncFont($, prefs.font, false).catch(() => undefined)
+    // A session that opens or resumes draws its transcript before this module has loaded, and
+    // keeps those rows: ask for them again now, and once more after a resume finishes loading.
+    $.ui.invalidate('ui.render')
+    $.clock.after(1500, () => $.ui.invalidate('ui.render'))
     return next(e)
   })
 
