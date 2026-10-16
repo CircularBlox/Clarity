@@ -12,6 +12,8 @@ import {
   editorSettingsPath,
   editDelta,
   fillActivity,
+  foldText,
+  nearestLimit,
   fillLedger,
   formatTokens,
   groupSummary,
@@ -153,6 +155,20 @@ describe('logic', () => {
     expect(parseAttachments('@"my file.md" twice @"my file.md"')).toEqual([{ kind: 'file', name: 'my file.md', detail: '' }])
   })
 
+  test('long text folds to its first lines, closing a code fence it cut open', async () => {
+    expect(foldText('a\nb', 30)).toBe(null)
+    const text = ['intro', '```ts', ...Array.from({ length: 40 }, (_, i) => `line ${i}`), '```'].join('\n')
+    const fold = foldText(text, 30, 12)
+    expect(fold?.hidden).toBe(31)
+    expect(fold?.head.split('\n').length).toBe(13)
+    expect(fold?.head.endsWith('```')).toBe(true)
+  })
+
+  test('the usage limit nearest to running out is the one shown', async () => {
+    expect(nearestLimit([])).toBe(null)
+    expect(nearestLimit([{ percentUsed: 40 }, { percentUsed: 91, resetsAt: '2026-10-16T02:30:00Z' }])).toEqual({ percent: 91, resetsAt: '2026-10-16T02:30:00Z' })
+  })
+
   test('edits add up per file', async () => {
     const delta = editDelta('Edit', { file_path: '/r/a.ts', old_string: 'a\nb', new_string: 'a\nb\nc' })
     expect(delta).toEqual({ added: 3, removed: 2 })
@@ -240,6 +256,52 @@ describe('transcript', () => {
     expect(await ui.find({ text: / ts / })).toBeDefined()
     expect(await ui.find({ key: 'copy-code-1' })).toBeDefined()
     expect(await ui.find({ text: /engine reply/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('a long reply folds, and its button opens and closes it', async ($, on) => {
+    on('ui.render', { component: 'AssistantMessage' }, ($, e) => $.ui.resolve(e).Text({ children: 'engine reply' }))
+    const text = Array.from({ length: 40 }, (_, i) => `Paragraph line ${i + 1}.`).join('\n')
+    const ui = await $.ui.mount({
+      plugin: 'clarity',
+      surface: 'terminal',
+      component: 'AssistantMessage',
+      viewport: VIEW,
+      props: { text, isFirstOfReply: true },
+    })
+    expect(await ui.find({ text: /show 28 more lines/ })).toBeDefined()
+    expect(await ui.find({ text: /Paragraph line 40\./ })).toBeUndefined()
+    await ui.press({ key: 'fold' })
+    expect(await ui.find({ text: /Paragraph line 40\./ })).toBeDefined()
+    expect(await ui.find({ text: /show less/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a long pasted prompt folds too', async ($, on) => {
+    engineDraws(on, 'UserMessage', 'engine prompt')
+    const text = Array.from({ length: 20 }, (_, i) => `pasted ${i + 1}`).join('\n')
+    const ui = await $.ui.mount({
+      plugin: 'clarity',
+      surface: 'terminal',
+      component: 'UserMessage',
+      viewport: VIEW,
+      props: { text, origin: { kind: 'composer' }, isExpanded: false },
+    })
+    expect(await ui.find({ text: /show 8 more lines/ })).toBeDefined()
+    expect(await ui.find({ text: /pasted 20/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('the stock spinner still shows its own messages, like compacting', async ($, on) => {
+    on('ui.render', { component: 'Spinner' }, ($, e) => $.ui.resolve(e).Text({ children: e.props.message ?? e.props.word }))
+    const ui = await $.ui.mount({
+      plugin: 'clarity',
+      surface: 'terminal',
+      component: 'Spinner',
+      viewport: VIEW,
+      props: { word: 'Simmering', message: 'Compacting conversation', suffix: '…', mode: 'requesting' },
+    })
+    expect(await ui.find({ text: /Compacting conversation/ })).toBeDefined()
     await ui.unmount()
   })
 
@@ -439,6 +501,21 @@ describe('menu, band and panel', () => {
     expect(await ui.find({ text: /Thinking/ })).toBeDefined()
     expect(await ui.find({ text: /context 41%/ })).toBeDefined()
     expect(await ui.find({ key: 'menu' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the band warns as a usage limit nears, with when it resets', async ($, on) => {
+    engineDraws(on, 'AbovePrompt', '')
+    const ledger = { ...EMPTY_LEDGER, limit: { percent: 92, resetsAt: '2026-10-16T02:30:00Z' } }
+    on('state.get', { plugin: 'clarity', key: 'ledger' }, () => ({ value: { value: ledger, version: 1 } }))
+    const ui = await $.ui.mount({
+      plugin: 'clarity',
+      surface: 'terminal',
+      component: 'AbovePrompt',
+      viewport: VIEW,
+      props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 110, scroll: { offset: 0, bodyRows: 6 }, view: {} },
+    })
+    expect(await ui.find({ text: /limit 92% · resets/ })).toBeDefined()
     await ui.unmount()
   })
 

@@ -3,12 +3,30 @@
 import type { ElementTable, RenderElement } from 'claude-code'
 
 import type { Activity, Ledger, Prefs, TurnSummary } from '../types'
-import { MARK, activityText, clip, formatClock, formatDuration, formatTokens, kindOf, planProgress, shortPath } from './logic'
+import { MARK, PANEL_TURNS, activityText, clip, formatClock, formatDuration, formatTokens, kindOf, planProgress, shortPath, toAscii } from './logic'
 import type { Attachment, Block, Palette, Status } from './logic'
 
 export type UI = ElementTable<'terminal'>
 
 export type Look = { prefs: Prefs; colors: Palette; columns: number; isNarrow: boolean }
+
+// The element table with every symbol clarity draws swapped for plain ASCII, and borders drawn
+// in ASCII too. Everything clarity draws goes through the table, so this one wrap covers it all.
+export function asciiUI(ui: UI): UI {
+  const plain = (children: unknown): unknown =>
+    typeof children === 'string' ? toAscii(children) : Array.isArray(children) ? children.map(plain) : children
+  const table = { ...ui } as Record<string, unknown>
+  table.Text = (props: Record<string, unknown>) => (ui.Text as (p: unknown) => RenderElement)({ ...props, children: plain(props.children) })
+  table.Button = (props: Record<string, unknown>) =>
+    (ui.Button as (p: unknown) => RenderElement)({
+      ...props,
+      children: plain(props.children),
+      ...(typeof props.label === 'string' ? { label: toAscii(props.label) } : {}),
+    })
+  table.Box = (props: Record<string, unknown>) =>
+    (ui.Box as (p: unknown) => RenderElement)(props.borderStyle === undefined ? props : { ...props, borderStyle: 'classic' })
+  return table as unknown as UI
+}
 
 // A word on a coloured ground: dark text on the colour, or inverse where the theme has no hex.
 export function badge(ui: UI, colors: Palette, text: string, tone: string): RenderElement {
@@ -85,13 +103,14 @@ export function attachmentCards(ui: UI, look: Look, attachments: readonly Attach
 }
 
 // The person's prompt: a rounded box in their colour, labelled, with what it brought along.
-export function userRow(ui: UI, look: Look, text: string, attachments: readonly Attachment[] = []): RenderElement {
+export function userRow(ui: UI, look: Look, text: string, attachments: readonly Attachment[] = [], more?: Chip): RenderElement {
   const { Box, Text } = ui
   const { colors } = look
   return (
     <Box flexDirection="column" marginTop={1} borderStyle="round" borderColor={colors.you} paddingX={1} width={replyWidth(look) + (look.isNarrow ? 0 : 1)}>
       {badge(ui, colors, ' you ', colors.you)}
       <Text color={colors.text}>{text}</Text>
+      {more !== undefined && chip(ui, look, { ...more, tone: copyTone(colors) })}
       {attachmentCards(ui, look, attachments)}
     </Box>
   )
@@ -328,7 +347,7 @@ function levelColor(colors: Palette, percent: number): string {
 }
 
 function phaseColor(colors: Palette, activity: Activity): string {
-  if (activity.phase === 'waiting') return colors.warn
+  if (activity.phase === 'waiting' || activity.phase === 'compacting') return colors.warn
   if (activity.phase === 'idle') return colors.ok
   return activity.phase === 'tool' ? colors.kinds[kindOf(activity.tool)] : colors.claude
 }
@@ -340,7 +359,7 @@ function phaseBadge(ui: UI, colors: Palette, activity: Activity): RenderElement 
 export type BandActions = { panel: () => void; menu: () => void; copy?: () => void }
 
 // The toolbar above the prompt: what Claude is doing, what changed, context, and chips.
-export type TurnStats = { elapsedMs: number; tokens: number }
+export type TurnStats = { elapsedMs: number; tokens: number; tip: string | null }
 
 export function band(ui: UI, look: Look, activity: Activity, ledger: Ledger, width: number, stats: TurnStats, actions: BandActions): RenderElement {
   const { Box, Text } = ui
@@ -348,7 +367,11 @@ export function band(ui: UI, look: Look, activity: Activity, ledger: Ledger, wid
   const files = Object.keys(ledger.files).length
   // In order of what matters most when room is short.
   const plan = planProgress(ledger.todos)
+  // A plan usage limit shows once it passes 80%, with when it resets.
+  const limit = ledger.limit !== null && ledger.limit.percent >= 80 ? ledger.limit : null
+  const resets = limit?.resetsAt != null && !Number.isNaN(Date.parse(limit.resetsAt)) ? ` · resets ${formatClock(Date.parse(limit.resetsAt))}` : ''
   const wanted: { text: string; tone: string }[] = [
+    ...(limit !== null ? [{ text: `limit ${Math.round(limit.percent)}%${resets}`, tone: limit.percent >= 95 ? colors.error : colors.warn }] : []),
     ...(ledger.errors.length > 0 ? [{ text: `${ledger.errors.length} failed`, tone: colors.error }] : []),
     ...(plan !== null ? [{ text: `task ${plan.at}/${plan.of}`, tone: colors.claude }] : []),
     ...(ledger.agents > 0 ? [{ text: `${ledger.agents} agent${ledger.agents === 1 ? '' : 's'}`, tone: colors.kinds.agent }] : []),
@@ -369,7 +392,9 @@ export function band(ui: UI, look: Look, activity: Activity, ledger: Ledger, wid
     ...(stats.elapsedMs >= 1000 ? [formatDuration(stats.elapsedMs)] : []),
     ...(stats.tokens > 0 ? [`↓ ${formatTokens(stats.tokens)} tokens`] : []),
   ]
-  const doingParts = [activityText(activity), ...running]
+  // A turn that died on an error says so, in red, until the next one starts.
+  const isStopped = activity.phase === 'idle' && ledger.stopped !== null
+  const doingParts = isStopped ? [`Stopped: ${ledger.stopped}`] : [activityText(activity), ...running]
   const doing = doingParts.join(' · ')
   // The status comes first: it keeps up to 48 columns (enough for the step, its time and its
   // tokens) before any fact gets a place; each fact then shows whole or not at all.
@@ -385,13 +410,14 @@ export function band(ui: UI, look: Look, activity: Activity, ledger: Ledger, wid
   let shown = doingParts
   while (shown.length > 1 && shown.join(' · ').length > statusRoom) shown = shown.slice(0, -1)
   const status = clip(shown.join(' · '), statusRoom)
-  return (
+  const tone = isStopped ? colors.error : phaseColor(colors, activity)
+  const line = (
     <Box flexDirection="row" justifyContent="space-between" width={width} paddingX={1} backgroundColor={colors.barBg}>
       {/* The status gives way first; the chips keep their size so they never wrap. */}
       <Box flexShrink={1} overflow="hidden">
       <Text wrap="truncate">
-        {phaseBadge(ui, colors, activity)}
-        <Text color={phaseColor(colors, activity)} bold>
+        {isStopped ? badge(ui, colors, ' ✗ ', colors.error) : phaseBadge(ui, colors, activity)}
+        <Text color={tone} bold>
           {' '}
           {status}
         </Text>
@@ -410,10 +436,23 @@ export function band(ui: UI, look: Look, activity: Activity, ledger: Ledger, wid
       </Box>
     </Box>
   )
+  // During a long turn, a tip under the bar, one at a time.
+  return activity.phase === 'idle' || stats.tip === null ? (
+    line
+  ) : (
+    <Box flexDirection="column">
+      {line}
+      <Box paddingX={1}>
+        <Text color={colors.muted} italic wrap="truncate">
+          Tip: {stats.tip}
+        </Text>
+      </Box>
+    </Box>
+  )
 }
 
 // The sidebar: what is happening, the turns so far, what changed, what failed.
-export type PanelActions = { copyTurn: (index: number) => void }
+export type PanelActions = { copyTurn: (index: number) => void; toggleTurns: () => void; isAllTurns: boolean }
 
 export function panel(ui: UI, look: Look, activity: Activity, ledger: Ledger, width: number, actions: PanelActions): RenderElement {
   const { Box, Button, Text } = ui
@@ -431,8 +470,9 @@ export function panel(ui: UI, look: Look, activity: Activity, ledger: Ledger, wi
   )
   const files = Object.entries(ledger.files)
   const biggest = Math.max(1, ...files.map(([, c]) => c.added + c.removed))
-  const turns = ledger.turns.slice(-8)
+  const turns = ledger.turns.slice(actions.isAllTurns ? -50 : -PANEL_TURNS)
   const firstTurn = ledger.turns.length - turns.length + 1
+  const isFolded = ledger.turns.length > PANEL_TURNS
   const cells = Math.max(6, Math.min(20, width - 20))
   const level = ledger.context === null ? null : meter(ledger.context, cells)
   const done = ledger.todos.filter(t => t.status === 'completed').length
@@ -551,6 +591,13 @@ export function panel(ui: UI, look: Look, activity: Activity, ledger: Ledger, wi
             </Box>
           )
         })}
+        {isFolded &&
+          chip(ui, look, {
+            key: 'all-turns',
+            label: actions.isAllTurns ? '▴ show fewer' : `▾ show all ${Math.min(ledger.turns.length, 50)}`,
+            tone: copyTone(colors),
+            onPress: actions.toggleTurns,
+          })}
       </Box>
     </Box>
   )

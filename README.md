@@ -81,8 +81,8 @@ These previews are drawn from clarity's own output, rendered through Claude Code
 
 | Part | What you see |
 | --- | --- |
-| Your prompt | A rounded box with a `you` label. Files you add with `@`, folders, pasted images and pasted text each get a small card under it. |
-| Claude's reply | Its own frame with a `claude` label. A line of room between paragraphs, and lines that wrap at 80 columns. |
+| Your prompt | A rounded box with a `you` label. Files you add with `@`, folders, pasted images and pasted text each get a small card under it. Prompts over 12 lines fold the same way. |
+| Claude's reply | Its own frame with a `claude` label. A line of room between paragraphs, and lines that wrap at 80 columns. Replies over 30 lines fold to their first lines, with a button to show the rest. |
 | Code | Its own frame with the language and a copy button. Long replies get a copy button too. |
 | Tool rows | One line on a tinted strip. Reads are blue, searches purple, commands orange, edits green, the web cyan, agents pink. Edits show `+12 −3`. |
 | Back-to-back calls | Fold into one strip, `[Bash ×2] [Edit] 3 tools`. Click to open, click again to fold. |
@@ -90,7 +90,7 @@ These previews are drawn from clarity's own output, rendered through Claude Code
 | Questions | A banner, so you notice Claude is waiting on you. |
 | Slash commands | Their output sits in a titled card. |
 | End of a turn | A rule with the time. After a turn over 45 seconds, a "While you were away" card with tool calls, files changed and failures. |
-| Status band | What Claude is doing, for how long, tokens written, the plan step, running agents, failures and context. Facts that do not fit drop out whole. |
+| Status band | What Claude is doing, for how long, tokens written, the plan step, running agents, failures and context. It shows compaction with a timer, and warns once a plan usage limit passes 80%, with when it resets. Facts that do not fit drop out whole. |
 | Session panel | Now, context and cost, the plan, changed files, failures, recent calls and your prompts. Click a prompt to copy it. |
 
 Buttons are always in brackets, like `[ ⧉ copy ]`, and change when you point at them. Coloured words without brackets are labels.
@@ -112,7 +112,7 @@ Buttons are always in brackets, like `[ ⧉ copy ]`, and change when you point a
 
 `auto` colours follow your Claude Code theme. `colorblind` uses the Okabe–Ito set. `theme` uses only your theme's own colours, which suits light themes.
 
-`terminal font` sets your editor's terminal (Cursor or VS Code) to JetBrains Mono: 13 with 1.3 line spacing for `readable`, 14 with 1.35 for `large`. It falls back to Menlo when JetBrains Mono is missing. `leave` is the default and touches nothing.
+`terminal font` sets your editor's terminal (Cursor or VS Code) to JetBrains Mono: 13 with 1.3 line spacing for `readable`, 14 with 1.35 for `large`, and turns on smooth scrolling. It falls back to Menlo when JetBrains Mono is missing. `leave` is the default and touches nothing.
 
 Settings are kept between sessions.
 
@@ -147,6 +147,8 @@ The session panel docks once the terminal is about 110 columns wide when you ope
 - Folding and the plan start from the turn after clarity loads.
 - The status band hides the stock spinner's tips. Turn the band off to get the spinner back.
 - Plan tracking reads Claude's TodoWrite lists.
+- Where an organization manages Claude Code, installed mods do not see compaction start and end. The band then leaves compaction to Claude Code's own spinner line, which still shows.
+- Smooth scrolling covers the editor's terminal. Inside Claude Code's fullscreen layout, Claude Code scrolls the transcript itself.
 
 ## Develop
 

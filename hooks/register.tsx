@@ -8,6 +8,8 @@ import {
   FONTS,
   DEFAULT_PREFS,
   EDITS,
+  FOLD_PROMPT,
+  FOLD_REPLY,
   EMPTY_LEDGER,
   IDLE,
   KEEP_RESULT,
@@ -23,9 +25,11 @@ import {
   editDelta,
   editedPath,
   editorSettingsPath,
+  nearestLimit,
   fillActivity,
   fillLedger,
   firstLine,
+  foldText,
   groupTools,
   lineCount,
   palettes,
@@ -215,7 +219,7 @@ async function refreshContext($: EngineInterface) {
   try {
     const usage = await $.session.usage()
     const percent = usage.context.percent ?? (usage.context.tokens !== undefined ? (usage.context.tokens / usage.context.window) * 100 : null)
-    await editLedger($, ledger => ({ ...ledger, context: percent, cost: usage.cost?.usd ?? ledger.cost }))
+    await editLedger($, ledger => ({ ...ledger, context: percent, cost: usage.cost?.usd ?? ledger.cost, limit: nearestLimit(usage.rateLimits) }))
   } catch {
     // No usage to read here (a test, a headless run): the band leaves context out.
   }
@@ -441,6 +445,30 @@ export const register: Register = on => {
     return ran
   })
 
+  // Compaction: the band says it is happening and for how long, and a toast says what it freed.
+  // A compaction worked out ahead of time, in the background, is left alone.
+  on('session.compact', async ($, e, next) => {
+    if (e.trigger === 'precompute') return next(e)
+    const now = await $.clock.now()
+    const before = (await readLedger($)).context
+    await editActivity($, (): Activity => ({ phase: 'compacting', tool: '', detail: '', since: now, tokens: 0 }))
+    await update($, tickAtom, () => now)
+    ticker?.cancel()
+    ticker = $.clock.every(1000, () => void $.clock.now().then(t => update($, tickAtom, () => t)))
+    try {
+      return await next(e)
+    } finally {
+      ticker?.cancel()
+      ticker = undefined
+      await editActivity($, () => IDLE)
+      await refreshContext($)
+      const after = (await readLedger($)).context
+      const took = Math.round(((await $.clock.now()) - now) / 1000)
+      const freed = before !== null && after !== null ? ` · context ${Math.round(before)}% → ${Math.round(after)}%` : ''
+      $.ui.toast(`clarity: compacted in ${took}s${freed}`)
+    }
+  }).catch(($, e, next) => next(e))
+
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId === undefined) {
@@ -626,7 +654,15 @@ export const register: Register = on => {
         </ui.Box>
       )
     }
-    return userRow(ui, l, e.props.text, parseAttachments(e.props.text))
+    // A long prompt (a paste, say) folds to its first lines until opened.
+    const fold = foldText(e.props.text, FOLD_PROMPT)
+    const open = memberOf(expandedAtom, e)
+    const isOpen = fold !== null && (await read($, open))
+    const more: Chip | undefined =
+      fold === null
+        ? undefined
+        : { key: 'fold', label: isOpen ? '▴ show less' : `▾ show ${fold.hidden} more lines`, onPress: () => void update($, open, v => !v) }
+    return userRow(ui, l, fold === null || isOpen ? e.props.text : fold.head, parseAttachments(e.props.text), more)
   })
 
   // A reply: each block in a soft frame, paragraphs spaced, code in its own copyable box.
@@ -638,13 +674,22 @@ export const register: Register = on => {
     const byMod = drawnByMod(next.trace) !== null
     const text = e.props.text
     const onCopy = l.prefs.copy ? (code: string) => copyText($, e, code) : undefined
-    const chips: Chip[] =
-      l.prefs.copy && text.split('\n').length >= COPY_LINES
+    // A long reply folds to its first lines until opened (clarity's own drawing only).
+    const fold = byMod ? null : foldText(text, FOLD_REPLY)
+    const open = memberOf(expandedAtom, e)
+    const isOpen = fold !== null && (await read($, open))
+    const chips: Chip[] = [
+      ...(fold === null
+        ? []
+        : [{ key: 'fold', label: isOpen ? '▴ show less' : `▾ show ${fold.hidden} more lines`, onPress: () => void update($, open, v => !v) }]),
+      ...(l.prefs.copy && text.split('\n').length >= COPY_LINES
         ? [{ key: 'copy-reply', label: '⧉ copy reply', onPress: () => copyText($, e, text) }]
-        : []
+        : []),
+    ]
     // Another mod sizes its own tables and cards to the width: leave it the whole of it.
     const boxLook = byMod ? { ...l, prefs: { ...l.prefs, measure: 0 } } : l
-    const body = byMod ? below : replyBlocks(ui, l, splitBlocks(text), onCopy)
+    const shown = fold === null || isOpen ? text : fold.head
+    const body = byMod ? below : replyBlocks(ui, l, splitBlocks(shown), onCopy)
     return replyBox(ui, boxLook, e.props.isFirstOfReply, body, chips, !byMod)
   })
 
@@ -777,8 +822,9 @@ export const register: Register = on => {
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     const l = await look($, e)
     if (l === null) return next(e)
-    if (l.prefs.band) return elements($, e).Box({})
+    // Claude Code's own messages (compacting, retrying) always show; only the word steps aside.
     if (e.props.message !== null) return next(e)
+    if (l.prefs.band) return elements($, e).Box({})
     const activity = await readActivity($)
     if (activity.phase !== 'tool' && activity.phase !== 'waiting') return next(e)
     return next({ ...e, props: { ...e.props, message: clip(activityText(activity), Math.max(20, l.columns - 40)) } })

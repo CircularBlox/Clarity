@@ -1,5 +1,5 @@
 // Pure helpers: no `$`, so tests import them directly.
-import type { Activity, Alerts, FileChange, FontChoice, Ledger, PaletteChoice, PaletteName, PanelChoice, Prefs, Todo, ToolRun, TurnSummary } from '../types'
+import type { Activity, Alerts, FileChange, FontChoice, IconChoice, Ledger, PaletteChoice, PaletteName, PanelChoice, Prefs, Todo, ToolRun, TurnSummary } from '../types'
 
 // What a tool does, for its colour: reading, searching, running, writing, the web, delegating.
 export type Kind = 'read' | 'search' | 'run' | 'write' | 'web' | 'agent' | 'other'
@@ -217,6 +217,8 @@ export function activityText(activity: Activity): string {
       return 'Thinking'
     case 'writing':
       return 'Writing'
+    case 'compacting':
+      return 'Compacting the conversation'
     case 'waiting':
       return 'Waiting for you'
     case 'tool': {
@@ -404,6 +406,7 @@ export const PANELS: readonly PanelChoice[] = ['auto', 'off']
 // 80 is a comfortable reading measure; the menu cycles from it.
 export const WIDTHS: readonly number[] = [80, 70, 100, 120, 0]
 export const FONTS: readonly FontChoice[] = ['leave', 'readable', 'large']
+export const ICONS: readonly IconChoice[] = ['unicode', 'ascii']
 
 // The editor terminal settings each font choice writes. JetBrains Mono first, Menlo where it
 // is not installed; ligatures off so `!=` and `->` read as typed.
@@ -414,6 +417,7 @@ const FONT_KEYS: Record<Exclude<FontChoice, 'leave'>, Record<string, unknown>> =
     'terminal.integrated.lineHeight': 1.3,
     'terminal.integrated.fontWeightBold': 'bold',
     'terminal.integrated.fontLigatures.enabled': false,
+    'terminal.integrated.smoothScrolling': true,
   },
   large: {
     'terminal.integrated.fontFamily': "'JetBrains Mono', Menlo, monospace",
@@ -421,6 +425,7 @@ const FONT_KEYS: Record<Exclude<FontChoice, 'leave'>, Record<string, unknown>> =
     'terminal.integrated.lineHeight': 1.35,
     'terminal.integrated.fontWeightBold': 'bold',
     'terminal.integrated.fontLigatures.enabled': false,
+    'terminal.integrated.smoothScrolling': true,
   },
 }
 const FONT_KEY_NAMES = Object.keys(FONT_KEYS.readable)
@@ -505,6 +510,7 @@ export const DEFAULT_PREFS: Prefs = {
   measure: 80,
   copy: true,
   font: 'leave',
+  icons: 'unicode',
 }
 
 function oneOf<T>(list: readonly T[], value: unknown, fallback: T): T {
@@ -526,6 +532,7 @@ export function readPrefs(stored: unknown): Prefs {
     measure: oneOf(WIDTHS, s.measure, DEFAULT_PREFS.measure),
     copy: bool(s.copy, DEFAULT_PREFS.copy),
     font: oneOf(FONTS, s.font, DEFAULT_PREFS.font),
+    icons: oneOf(ICONS, s.icons, DEFAULT_PREFS.icons),
   }
 }
 
@@ -537,6 +544,8 @@ export const EMPTY_LEDGER: Ledger = {
   lastReply: '',
   context: null,
   cost: null,
+  limit: null,
+  stopped: null,
   todos: [],
   recent: [],
   agents: 0,
@@ -605,6 +614,8 @@ export function fillLedger(raw: unknown): Ledger {
     lastReply: typeof r.lastReply === 'string' ? r.lastReply : '',
     context: num(r.context),
     cost: num(r.cost),
+    limit: readLimit(r.limit),
+    stopped: typeof r.stopped === 'string' ? r.stopped : null,
     todos: list(r.todos),
     recent: list(r.recent),
     agents: num(r.agents) ?? 0,
@@ -612,9 +623,37 @@ export function fillLedger(raw: unknown): Ledger {
   }
 }
 
+function readLimit(v: unknown): Ledger['limit'] {
+  if (v === null || typeof v !== 'object') return null
+  const r = v as { percent?: unknown; resetsAt?: unknown }
+  if (typeof r.percent !== 'number') return null
+  return { percent: r.percent, resetsAt: typeof r.resetsAt === 'string' ? r.resetsAt : null }
+}
+
+// The limit nearest to running out, from Claude Code's report of the plan's limits.
+export function nearestLimit(limits: readonly { percentUsed: number; resetsAt?: string }[]): Ledger['limit'] {
+  const top = [...limits].sort((a, b) => b.percentUsed - a.percentUsed)[0]
+  return top === undefined ? null : { percent: top.percentUsed, resetsAt: top.resetsAt ?? null }
+}
+
+// Text over this many lines folds to its first lines until opened.
+export const FOLD_REPLY = 30
+export const FOLD_PROMPT = 12
+export const FOLD_SHOWN = 12
+
+// The first `shown` lines of a long text, with a code fence it cut open closed again so the
+// rest still draws as prose. Null when the text is short enough to show whole.
+export function foldText(text: string, over: number, shown = FOLD_SHOWN): { head: string; hidden: number } | null {
+  const lines = text.split('\n')
+  if (lines.length <= over) return null
+  const kept = lines.slice(0, shown)
+  const fences = kept.filter(line => /^\s*(```|~~~)/.test(line)).length
+  return { head: kept.join('\n') + (fences % 2 === 1 ? '\n```' : ''), hidden: lines.length - shown }
+}
+
 export function fillActivity(raw: unknown): Activity {
   const r = (raw !== null && typeof raw === 'object' ? raw : {}) as Partial<Activity>
-  const phases = ['idle', 'thinking', 'writing', 'tool', 'waiting'] as const
+  const phases = ['idle', 'thinking', 'writing', 'tool', 'waiting', 'compacting'] as const
   return {
     phase: phases.includes(r.phase as never) ? (r.phase as Activity['phase']) : 'idle',
     tool: typeof r.tool === 'string' ? r.tool : '',
@@ -623,3 +662,37 @@ export function fillActivity(raw: unknown): Activity {
     tokens: typeof r.tokens === 'number' ? r.tokens : 0,
   }
 }
+
+// Every symbol clarity draws, and its plain ASCII stand-in for terminals or fonts without it.
+const ASCII: Record<string, string> = {
+  '▸': '>', '▾': 'v', '▴': '^', '✓': '+', '✗': 'x', '●': '*', '⧉': '#', '▤': '#', '☰': '=',
+  '━': '=', '─': '-', '│': '|', '↓': 'v', '…': '...', '⊘': '-', '▣': '#', '≡': '=', '○': 'o',
+  '❯': '>', '▮': '|', '█': '#', '░': '.', '·': '-', '−': '-', '→': '->', '×': 'x', '⎿': '\\',
+}
+const ASCII_RE = new RegExp(`[${Object.keys(ASCII).join('')}]`, 'g')
+
+export function toAscii(text: string): string {
+  return text.replace(ASCII_RE, ch => ASCII[ch] ?? ch)
+}
+
+// Short tips the band shows, one at a time, while a turn runs long. Claude Code's own tips are
+// not readable by a mod, so these are clarity's.
+export const TIPS = [
+  'Esc stops Claude at any point.',
+  'Type @ in your prompt to add a file.',
+  '/compact frees context when it runs high.',
+  'Shift+Tab switches modes, like plan mode.',
+  'Ctrl+O shows every tool call in full.',
+  'Click a tool strip to open it.',
+  '/clarity panel shows the plan and changed files.',
+  '/clarity opens the settings.',
+]
+
+// The tip for this moment: a new one every 10 seconds, none in the first 6.
+export function tipAt(elapsedMs: number): string | null {
+  if (elapsedMs < 6000) return null
+  return TIPS[Math.floor((elapsedMs - 6000) / 10_000) % TIPS.length] ?? null
+}
+
+// How long the panel's prompt list is before it folds.
+export const PANEL_TURNS = 8

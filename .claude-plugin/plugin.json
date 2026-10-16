@@ -1,6 +1,6 @@
 {
   "name": "clarity",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.0-beta.2",
   "description": "A clearer Claude Code terminal: boxed and organized you/claude conversations, colour-coded clickable tool rows, a live status band with a timer and task info, a session panel, copy buttons, cards, alerts, readable palettes, and overall transforms Claude Code.",
   "types": "./types/index.d.ts",
   "author": {

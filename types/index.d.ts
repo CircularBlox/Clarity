@@ -5,6 +5,8 @@ export type Alerts = 'off' | 'notify' | 'sound' | 'both'
 export type PanelChoice = 'auto' | 'off'
 /** The editor terminal's font: clarity's readable sizes, or left as the person has it. */
 export type FontChoice = 'leave' | 'readable' | 'large'
+/** Symbols as drawn: unicode, or plain ASCII for terminals and fonts without them. */
+export type IconChoice = 'unicode' | 'ascii'
 
 export type Prefs = {
   /** The mod draws at all; off hands every row back to the engine. */
@@ -23,6 +25,7 @@ export type Prefs = {
   measure: number
   copy: boolean
   font: FontChoice
+  icons: IconChoice
 }
 
 export type Env = {
@@ -30,7 +33,7 @@ export type Env = {
   theme: string
 }
 
-export type Phase = 'idle' | 'thinking' | 'writing' | 'tool' | 'waiting'
+export type Phase = 'idle' | 'thinking' | 'writing' | 'tool' | 'waiting' | 'compacting'
 
 /** What the main loop is doing now, for the band and the spinner. */
 export type Activity = {
@@ -73,6 +76,10 @@ export type Ledger = {
   context: number | null
   /** What the session has cost so far, in US dollars, when known. */
   cost: number | null
+  /** The plan usage limit nearest to running out, when Claude Code reports one. */
+  limit: { percent: number; resetsAt: string | null } | null
+  /** Why the last turn stopped, when it died on an error (a usage limit, the context limit). */
+  stopped: string | null
   todos: Todo[]
   recent: RecentAction[]
   /** Subagents running now. */
