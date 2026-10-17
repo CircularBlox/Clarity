@@ -3,8 +3,8 @@
 import type { ElementTable, RenderElement } from 'claude-code'
 
 import type { Activity, Ledger, Prefs, TurnSummary } from '../types'
-import { MARK, PANEL_TURNS, activityText, clip, formatClock, formatDuration, formatTokens, kindOf, planProgress, shortPath, toAscii } from './logic'
-import type { Attachment, Block, Palette, Status } from './logic'
+import { MARK, PANEL_TURNS, activityText, clip, formatClock, formatDuration, formatTokens, hearts, kindOf, planProgress, shortPath, toAscii } from './logic'
+import type { Attachment, Block, Palette, PipCell, PipPose, Status } from './logic'
 
 export type UI = ElementTable<'terminal'>
 
@@ -308,7 +308,7 @@ export function questionBanner(ui: UI, look: Look, body: RenderElement): RenderE
 }
 
 // The close of a long turn: what it did while you looked away.
-export function awayCard(ui: UI, look: Look, durationMs: number, summary: TurnSummary): RenderElement {
+export function awayCard(ui: UI, look: Look, durationMs: number, summary: TurnSummary, sitter: PipPose | null = null): RenderElement {
   const { Box, Text } = ui
   const { colors } = look
   const facts: { text: string; tone: string }[] = [
@@ -316,8 +316,8 @@ export function awayCard(ui: UI, look: Look, durationMs: number, summary: TurnSu
     ...(summary.files > 0 ? [{ text: `${summary.files} file${summary.files === 1 ? '' : 's'} changed (+${summary.added} −${summary.removed})`, tone: colors.kinds.write }] : []),
     ...(summary.failed > 0 ? [{ text: `${summary.failed} failed`, tone: colors.error }] : []),
   ]
-  return (
-    <Box flexDirection="column" marginTop={1} marginLeft={look.isNarrow ? 0 : 1} borderStyle="round" borderColor={colors.claude} paddingX={1}>
+  const card = (
+    <Box flexDirection="column" marginTop={sitter === null ? 1 : 0} marginLeft={look.isNarrow ? 0 : 1} borderStyle="round" borderColor={colors.claude} paddingX={1}>
       <Text>
         {badge(ui, colors, ' While you were away ', colors.claude)}
         <Text color={colors.muted}> {formatDuration(durationMs)}</Text>
@@ -332,6 +332,49 @@ export function awayCard(ui: UI, look: Look, durationMs: number, summary: TurnSu
           </Text>
         ))}
       </Text>
+    </Box>
+  )
+  // Pip sits on the card's top edge, glad you are back.
+  return sitter === null ? (
+    card
+  ) : (
+    <Box flexDirection="column" marginTop={1}>
+      {pip(ui, colors, sitter)}
+      {card}
+    </Box>
+  )
+}
+
+// Pip, drawn from its cells: the top `rows` of it, so it can peek over a box, with what it is
+// saying beside its head. Cells of the same colours share one Text.
+export function pip(ui: UI, colors: Palette, pose: PipPose, rows = 3): RenderElement {
+  const { Box, Text } = ui
+  const paint = { body: colors.kinds.search, eye: colors.chipText ?? colors.text, cheek: colors.error, leaf: colors.ok, drop: colors.kinds.read }
+  const runs = (row: PipCell[]) => {
+    const out: { text: string; fg: PipCell['fg']; bg: PipCell['bg'] }[] = []
+    for (const c of row) {
+      const last = out[out.length - 1]
+      if (last !== undefined && last.fg === c.fg && last.bg === c.bg) last.text += c.ch
+      else out.push({ text: c.ch, fg: c.fg, bg: c.bg })
+    }
+    return out
+  }
+  return (
+    <Box flexDirection="column" paddingLeft={pose.x}>
+      {pose.rows.slice(0, rows).map((row, y) => (
+        <Text wrap="truncate">
+          {runs(row).map(r =>
+            r.fg === null ? (
+              r.text
+            ) : (
+              <Text color={paint[r.fg]} backgroundColor={r.bg === null ? undefined : paint[r.bg]}>
+                {r.text}
+              </Text>
+            ),
+          )}
+          {y === 0 && pose.bubble !== '' && <Text color={colors.muted}> {pose.bubble}</Text>}
+        </Text>
+      ))}
     </Box>
   )
 }
@@ -352,14 +395,20 @@ function phaseColor(colors: Palette, activity: Activity): string {
   return activity.phase === 'tool' ? colors.kinds[kindOf(activity.tool)] : colors.claude
 }
 
-function phaseBadge(ui: UI, colors: Palette, activity: Activity): RenderElement {
-  return badge(ui, colors, activity.phase === 'idle' ? ' ✓ ' : activity.phase === 'waiting' ? ' ❯ ' : ' ● ', phaseColor(colors, activity))
+function phaseLabel(activity: Activity, face: string | null): string {
+  if (face !== null) return ` ${face} `
+  return activity.phase === 'idle' ? ' ✓ ' : activity.phase === 'waiting' ? ' ❯ ' : ' ● '
+}
+
+// The phase, as a coloured badge: a symbol, or the companion's face when it is on.
+function phaseBadge(ui: UI, colors: Palette, activity: Activity, face: string | null = null): RenderElement {
+  return badge(ui, colors, phaseLabel(activity, face), phaseColor(colors, activity))
 }
 
 export type BandActions = { panel: () => void; menu: () => void; copy?: () => void }
 
 // The toolbar above the prompt: what Claude is doing, what changed, context, and chips.
-export type TurnStats = { elapsedMs: number; tokens: number; tip: string | null }
+export type TurnStats = { elapsedMs: number; tokens: number; tip: string | null; face: string | null; pip: PipPose | null }
 
 export function band(ui: UI, look: Look, activity: Activity, ledger: Ledger, width: number, stats: TurnStats, actions: BandActions): RenderElement {
   const { Box, Text } = ui
@@ -398,14 +447,15 @@ export function band(ui: UI, look: Look, activity: Activity, ledger: Ledger, wid
   const doing = doingParts.join(' · ')
   // The status comes first: it keeps up to 48 columns (enough for the step, its time and its
   // tokens) before any fact gets a place; each fact then shows whole or not at all.
-  let room = width - 2 - chipsWidth - 4 - Math.min(doing.length, 48)
+  const badgeWidth = phaseLabel(activity, stats.face).length + 1
+  let room = width - 2 - chipsWidth - badgeWidth - Math.min(doing.length, 48)
   const facts = wanted.filter(f => {
     const cost = f.text.length + 3
     if (cost > room) return false
     room -= cost
     return true
   })
-  const statusRoom = Math.max(8, width - 2 - chipsWidth - 4 - facts.reduce((n, f) => n + f.text.length + 3, 0))
+  const statusRoom = Math.max(8, width - 2 - chipsWidth - badgeWidth - facts.reduce((n, f) => n + f.text.length + 3, 0))
   // Short of room, the status sheds its tokens, then its time, whole; only the step itself is cut.
   let shown = doingParts
   while (shown.length > 1 && shown.join(' · ').length > statusRoom) shown = shown.slice(0, -1)
@@ -416,7 +466,7 @@ export function band(ui: UI, look: Look, activity: Activity, ledger: Ledger, wid
       {/* The status gives way first; the chips keep their size so they never wrap. */}
       <Box flexShrink={1} overflow="hidden">
       <Text wrap="truncate">
-        {isStopped ? badge(ui, colors, ' ✗ ', colors.error) : phaseBadge(ui, colors, activity)}
+        {isStopped ? badge(ui, colors, stats.face === null ? ' ✗ ' : ` ${stats.face} `, colors.error) : phaseBadge(ui, colors, activity, stats.face)}
         <Text color={tone} bold>
           {' '}
           {status}
@@ -436,25 +486,30 @@ export function band(ui: UI, look: Look, activity: Activity, ledger: Ledger, wid
       </Box>
     </Box>
   )
-  // During a long turn, a tip under the bar, one at a time.
-  return activity.phase === 'idle' || stats.tip === null ? (
-    line
-  ) : (
+  // During a long turn, a tip under the bar, one at a time. Pip peeks over the bar's top edge.
+  const hasTip = activity.phase !== 'idle' && stats.tip !== null
+  if (!hasTip && stats.pip === null) return line
+  return (
     <Box flexDirection="column">
+      {stats.pip !== null && pip(ui, colors, stats.pip, 2)}
       {line}
-      <Box paddingX={1}>
-        <Text color={colors.muted} italic wrap="truncate">
-          Tip: {stats.tip}
-        </Text>
-      </Box>
+      {hasTip && (
+        <Box paddingX={1}>
+          <Text color={colors.muted} italic wrap="truncate">
+            Tip: {stats.tip}
+          </Text>
+        </Box>
+      )}
     </Box>
   )
 }
 
 // The sidebar: what is happening, the turns so far, what changed, what failed.
 export type PanelActions = { copyTurn: (index: number) => void; toggleTurns: () => void; isAllTurns: boolean }
+// The companion's face, and the sky over the panel, when the companion is on.
+export type PanelMood = { face: string; sky: { clouds: string; body: string }; greeting: string; pip: PipPose | null } | null
 
-export function panel(ui: UI, look: Look, activity: Activity, ledger: Ledger, width: number, actions: PanelActions): RenderElement {
+export function panel(ui: UI, look: Look, activity: Activity, ledger: Ledger, width: number, actions: PanelActions, mood: PanelMood = null): RenderElement {
   const { Box, Button, Text } = ui
   const { colors } = look
   const heading = (title: string, count: number | string, tone: string) => (
@@ -476,12 +531,27 @@ export function panel(ui: UI, look: Look, activity: Activity, ledger: Ledger, wi
   const cells = Math.max(6, Math.min(20, width - 20))
   const level = ledger.context === null ? null : meter(ledger.context, cells)
   const done = ledger.todos.filter(t => t.status === 'completed').length
+  const left = ledger.limit === null ? null : hearts(ledger.limit.percent)
+  const resets = ledger.limit?.resetsAt != null && !Number.isNaN(Date.parse(ledger.limit.resetsAt)) ? ` · resets ${formatClock(Date.parse(ledger.limit.resetsAt))}` : ''
   return (
     <Box flexDirection="column" width={width}>
+      {mood !== null && (
+        <Box flexDirection="row" justifyContent="space-between" paddingX={1}>
+          <Text color={colors.muted} italic>
+            {mood.greeting}
+          </Text>
+          <Text wrap="truncate">
+            <Text color={colors.muted}>{mood.sky.clouds}</Text>
+            <Text color={colors.warn}> {mood.sky.body}</Text>
+          </Text>
+        </Box>
+      )}
+      {/* Pip walks along the top of the Now box. */}
+      {mood?.pip != null && pip(ui, colors, mood.pip)}
       {/* Now: what Claude is doing, and how full the context is. */}
       <Box flexDirection="column" borderStyle="round" borderColor={phaseColor(colors, activity)} paddingX={1}>
         <Text wrap="truncate">
-          {phaseBadge(ui, colors, activity)}
+          {phaseBadge(ui, colors, activity, mood?.face ?? null)}
           <Text color={phaseColor(colors, activity)} bold>
             {' '}
             {activityText(activity)}
@@ -497,6 +567,17 @@ export function panel(ui: UI, look: Look, activity: Activity, ledger: Ledger, wi
               {Math.round(ledger.context)}%
             </Text>
             {ledger.cost !== null && <Text color={colors.muted}>  ${ledger.cost.toFixed(2)}</Text>}
+          </Text>
+        )}
+        {ledger.limit !== null && left !== null && (
+          <Text wrap="truncate">
+            <Text color={colors.muted}>limit   </Text>
+            <Text color={levelColor(colors, ledger.limit.percent)}>{left.full}</Text>
+            <Text color={colors.rule}>{left.empty}</Text>
+            <Text color={colors.muted}>
+              {' '}
+              {Math.max(0, 100 - Math.round(ledger.limit.percent))}% left{resets}
+            </Text>
           </Text>
         )}
       </Box>

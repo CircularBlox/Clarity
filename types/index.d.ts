@@ -8,6 +8,8 @@ export type FontChoice = 'leave' | 'readable' | 'large'
 /** Symbols as drawn: unicode, or plain ASCII for terminals and fonts without them. */
 export type IconChoice = 'unicode' | 'ascii'
 
+export type CompanionChoice = 'lively' | 'face' | 'off'
+
 export type Prefs = {
   /** The mod draws at all; off hands every row back to the engine. */
   isOn: boolean
@@ -26,6 +28,8 @@ export type Prefs = {
   copy: boolean
   font: FontChoice
   icons: IconChoice
+  /** lively: Pip walks on the band and the panel, beside the face; face: the face alone. */
+  companion: CompanionChoice
 }
 
 export type Env = {

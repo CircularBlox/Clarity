@@ -4,6 +4,13 @@ import type { On } from 'claude-code'
 import {
   DEFAULT_PREFS,
   EMPTY_LEDGER,
+  faceOf,
+  greeting,
+  hearts,
+  moodOf,
+  pipCells,
+  pipPose,
+  sky,
   activityText,
   applyFont,
   codeBlocks,
@@ -752,5 +759,103 @@ describe('beta 2 and 3', () => {
     expect(await ui.find({ key: 'icons-ascii' })).toBeDefined()
     expect(await ui.find({ text: /Plain ASCII for terminals/ })).toBeDefined()
     await ui.unmount()
+  })
+})
+
+describe('companion', () => {
+  const idle = { phase: 'idle' as const, tool: '', detail: '', since: 0, tokens: 0 }
+  const working = { ...idle, phase: 'tool' as const, tool: 'Bash', since: 1000 }
+
+  test('its mood follows what Claude is doing', () => {
+    expect(moodOf(working, EMPTY_LEDGER, false)).toBe('working')
+    expect(moodOf({ ...idle, phase: 'waiting' }, EMPTY_LEDGER, false)).toBe('waiting')
+    expect(moodOf({ ...idle, phase: 'thinking' }, EMPTY_LEDGER, false)).toBe('thinking')
+    expect(moodOf(working, { ...EMPTY_LEDGER, limit: { percent: 86, resetsAt: null } }, false)).toBe('worried')
+    expect(moodOf(idle, { ...EMPTY_LEDGER, stopped: 'usage limit reached' }, false)).toBe('stopped')
+    expect(moodOf(idle, EMPTY_LEDGER, false)).toBe('content')
+    expect(moodOf(idle, EMPTY_LEDGER, true)).toBe('sleeping')
+  })
+
+  test('faces swap frames, and turn plain in ASCII', () => {
+    expect(faceOf('thinking', 0)).not.toBe(faceOf('thinking', 1))
+    expect(faceOf('thinking', 2)).toBe(faceOf('thinking', 0))
+    expect(toAscii(faceOf('content', 0))).toBe('(^_^)')
+    expect(toAscii(faceOf('working', 0))).toBe('\\(o.o)')
+  })
+
+  test('hearts show what is left of a limit', () => {
+    expect(hearts(0)).toEqual({ full: '♥♥♥♥♥', empty: '' })
+    expect(hearts(58)).toEqual({ full: '♥♥♥', empty: '♡♡' })
+    expect(hearts(100)).toEqual({ full: '', empty: '♡♡♡♡♡' })
+  })
+
+  test('the sky has clouds by day, stars by night, and keeps its width', () => {
+    const day = sky(40, 14, 0)
+    expect(day.body).toBe('☀')
+    expect(day.clouds).toContain('☁')
+    expect([...day.clouds].length).toBe(37)
+    expect(sky(40, 14, 1).clouds).not.toBe(day.clouds)
+    const night = sky(40, 23, 0)
+    expect(night.body).toBe('☾')
+    expect(night.clouds).not.toContain('☁')
+    expect(greeting(9)).toBe('good morning')
+    expect(greeting(23)).toBe('up late')
+  })
+
+  test('the band wears the face, and the setting takes it off', async ($, on) => {
+    engineDraws(on, 'AbovePrompt', '')
+    on('state.get', { plugin: 'clarity', key: 'activity' }, () => ({ value: { value: working, version: 1 } }))
+    let prefs = PREFS
+    on('state.get', { plugin: 'clarity', key: 'prefs' }, () => ({ value: { value: prefs, version: 1 } }))
+    const props = { hasSurvey: false, isWorking: true, maxRows: 6, bodyColumns: 100, scroll: { offset: 0, bodyRows: 6 }, view: {} }
+    const on1 = await $.ui.mount({ plugin: 'clarity', surface: 'terminal', component: 'AbovePrompt', viewport: VIEW, props })
+    expect(await on1.find({ text: /\(•\.•\)/ })).toBeDefined()
+    await on1.unmount()
+    prefs = { ...PREFS, companion: 'off' }
+    const off = await $.ui.mount({ plugin: 'clarity', surface: 'terminal', component: 'AbovePrompt', viewport: VIEW, props })
+    expect(await off.find({ text: /\(•\.•\)/ })).toBeUndefined()
+    await off.unmount()
+  })
+
+  test('the panel shows hearts for a usage limit', async ($, on) => {
+    const ledger = { ...EMPTY_LEDGER, limit: { percent: 58, resetsAt: null } }
+    on('state.get', { plugin: 'clarity', key: 'ledger' }, () => ({ value: { value: ledger, version: 1 } }))
+    const ui = await $.ui.mount({ plugin: 'clarity', surface: 'terminal', component: 'Pane', requestId: 'clarity-session', viewport: VIEW, props: PANE_PROPS('Session') })
+    expect(await ui.find({ text: '♥♥♥' })).toBeDefined()
+    expect(await ui.find({ text: /42% left/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('Pip packs two pixels into each cell', () => {
+    const rows = pipCells(['#.......', '##......', 'e.......', '#.......', '........', '........'])
+    expect(rows.length).toBe(3)
+    expect(rows[0]?.[0]).toEqual({ ch: '█', fg: 'body', bg: null })
+    expect(rows[0]?.[1]).toEqual({ ch: '▄', fg: 'body', bg: null })
+    expect(rows[1]?.[0]).toEqual({ ch: '▀', fg: 'eye', bg: 'body' })
+    expect(rows[2]?.[0]).toEqual({ ch: ' ', fg: null, bg: null })
+  })
+
+  test('Pip paces while Claude works, and turns at the ends', () => {
+    const xs = Array.from({ length: 12 }, (_, f) => pipPose('working', f, 14).x)
+    expect(xs.slice(0, 7)).toEqual([0, 1, 2, 3, 4, 5, 4])
+    expect(Math.max(...xs)).toBe(5)
+    expect(pipPose('waiting', 1, 40).bubble).toBe('?')
+    expect(pipPose('sleeping', 0, 40).bubble).toBe('zz')
+  })
+
+  test('lively puts Pip over the band; face leaves it out', async ($, on) => {
+    engineDraws(on, 'AbovePrompt', '')
+    on('state.get', { plugin: 'clarity', key: 'activity' }, () => ({ value: { value: working, version: 1 } }))
+    let prefs = PREFS
+    on('state.get', { plugin: 'clarity', key: 'prefs' }, () => ({ value: { value: prefs, version: 1 } }))
+    const props = { hasSurvey: false, isWorking: true, maxRows: 6, bodyColumns: 100, scroll: { offset: 0, bodyRows: 6 }, view: {} }
+    const lively = await $.ui.mount({ plugin: 'clarity', surface: 'terminal', component: 'AbovePrompt', viewport: VIEW, props })
+    expect(await lively.find({ text: /[▀▄█]/ })).toBeDefined()
+    await lively.unmount()
+    prefs = { ...PREFS, companion: 'face' }
+    const face = await $.ui.mount({ plugin: 'clarity', surface: 'terminal', component: 'AbovePrompt', viewport: VIEW, props })
+    expect(await face.find({ text: /[▀▄█]/ })).toBeUndefined()
+    expect(await face.find({ text: /\(•\.•\)/ })).toBeDefined()
+    await face.unmount()
   })
 })

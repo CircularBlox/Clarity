@@ -4,6 +4,7 @@ import type { EngineInterface, Register, RenderElement, RenderInput } from 'clau
 import type { Activity, Env, FontChoice, Ledger, Prefs, RunPlace, ToolRun } from '../types'
 import {
   ALERTS,
+  COMPANIONS,
   ICONS,
   ASKS,
   FONTS,
@@ -46,8 +47,14 @@ import {
   splitBlocks,
   statusOf,
   summarizeTurn,
+  REST_MS,
+  faceOf,
+  greeting,
+  moodOf,
+  pipPose,
+  sky,
 } from './logic'
-import type { Status, TurnSnapshot } from './logic'
+import type { Mood, Status, TurnSnapshot } from './logic'
 import {
   badge,
   band,
@@ -66,7 +73,7 @@ import {
   turnRule,
   userRow,
 } from './rows'
-import type { Chip, Look, MenuSection, ToolParts, UI } from './rows'
+import type { Chip, Look, MenuSection, PanelMood, ToolParts, UI } from './rows'
 
 const prefsAtom = atom({ plugin: 'clarity', key: 'prefs' } as const, DEFAULT_PREFS)
 const envAtom = atom({ plugin: 'clarity', key: 'env' } as const, { theme: 'dark' } as Env)
@@ -79,6 +86,18 @@ const placesAtom = atom({ plugin: 'clarity', key: 'places' } as const, null as R
 
 // Every read and write of the session's state goes through these, which fill in fields an
 // older clarity never wrote.
+// The companion's face for now. It sleeps once no turn has run for a while; the last tick a
+// turn left behind says when that was.
+async function companionFace($: EngineInterface, activity: Activity, ledger: Ledger): Promise<{ face: string; mood: Mood; frame: number; now: number; tick: number }> {
+  const tick = await read($, tickAtom)
+  // Without a clock (some hosts and tests), it stays awake.
+  const now = await $.clock.now().catch(() => tick)
+  const isResting = tick === 0 || now - tick > REST_MS
+  const mood = moodOf(activity, ledger, isResting)
+  const frame = Math.floor(tick / 1000)
+  return { face: faceOf(mood, frame), mood, frame, now, tick }
+}
+
 async function readLedger($: EngineInterface): Promise<Ledger> {
   return fillLedger(await read($, ledgerAtom))
 }
@@ -309,7 +328,7 @@ export const register: Register = on => {
     // The first session after installing says where the settings are, once.
     if ((await $.store.get('welcomed')) !== true) {
       await $.store.set('welcomed', true)
-      $.ui.toast('clarity is on. /clarity opens its settings; /clarity off turns it off.')
+      $.ui.toast('(^‿^) clarity is on. /clarity opens its settings; /clarity off turns it off.')
     }
     let theme = 'dark'
     try {
@@ -523,6 +542,8 @@ export const register: Register = on => {
         }
       })
       await refreshContext($)
+      // The companion dozes off once the session has been quiet for a while.
+      $.clock.after(REST_MS + 1000, () => $.ui.invalidate('ui.render'))
       if (e.reason === 'error') {
         const { limit } = await readLedger($)
         const resets = limit?.resetsAt != null && !Number.isNaN(Date.parse(limit.resetsAt)) ? ` · resets ${formatClock(Date.parse(limit.resetsAt))}` : ''
@@ -606,6 +627,15 @@ export const register: Register = on => {
             current: prefs.tools,
             pick: v => save({ tools: v === 'full' ? 'full' : 'summary' }),
           },
+          {
+            key: 'companion',
+            hotkey: 'c',
+            label: 'companion',
+            hint: 'Pip, a small sprout that walks along the band and panel, and a face that shows what Claude is doing.',
+            options: COMPANIONS.map(v => ({ value: v, label: v })),
+            current: prefs.companion,
+            pick: v => save({ companion: v as Prefs['companion'] }),
+          },
         ],
       },
       {
@@ -656,11 +686,30 @@ export const register: Register = on => {
     const l: Look = { prefs, colors: palettes[resolvePalette(prefs.palette, env.theme)], columns: e.props.bodyColumns, isNarrow: false }
     const ledger = await readLedger($)
     const allTurns = memberOf(expandedAtom, { requestId: 'clarity-panel-all-turns' })
-    return panel(elements($, e), l, await readActivity($), ledger, e.props.bodyColumns, {
-      copyTurn: i => copyText($, e, ledger.prompts[i] ?? ledger.turns[i] ?? ''),
-      toggleTurns: () => void update($, allTurns, v => !v),
-      isAllTurns: await read($, allTurns),
-    })
+    const activity = await readActivity($)
+    let mood: PanelMood = null
+    if (prefs.companion !== 'off') {
+      const { face, mood: feeling, frame, now, tick } = await companionFace($, activity, ledger)
+      const hour = new Date(now).getHours()
+      // The clouds drift only while a turn runs, and rest where they stopped.
+      const hello = greeting(hour)
+      // The sky fills the row beside the greeting.
+      const walker = prefs.companion === 'lively' && !isAscii ? pipPose(feeling, frame, e.props.bodyColumns - 1) : null
+      mood = { face, sky: sky(e.props.bodyColumns - hello.length - 3, hour, Math.floor(tick / 1000)), greeting: hello, pip: walker }
+    }
+    return panel(
+      elements($, e),
+      l,
+      activity,
+      ledger,
+      e.props.bodyColumns,
+      {
+        copyTurn: i => copyText($, e, ledger.prompts[i] ?? ledger.turns[i] ?? ''),
+        toggleTurns: () => void update($, allTurns, v => !v),
+        isAllTurns: await read($, allTurns),
+      },
+      mood,
+    )
   })
 
   // A fast scroll in clarity's panes glides there a couple of rows a frame instead of jumping.
@@ -712,7 +761,12 @@ export const register: Register = on => {
     const ledger = await readLedger($)
     const activity = await readActivity($)
     const elapsed = activity.phase === 'idle' || activity.since === 0 ? 0 : Math.max(0, (await read($, tickAtom)) - activity.since)
-    const ours = band(ui, l, activity, ledger, e.props.bodyColumns, { elapsedMs: elapsed, tokens: activity.tokens, tip: activity.phase === 'compacting' ? null : tipAt(elapsed) }, {
+    const buddy = prefs.companion === 'off' ? null : await companionFace($, activity, ledger)
+    // Pip needs two rows over the band, and plain blocks: ASCII mode keeps to the face.
+    const tip = activity.phase === 'compacting' ? null : tipAt(elapsed)
+    const rowsLeft = e.props.maxRows - 1 - (activity.phase !== 'idle' && tip !== null ? 1 : 0)
+    const walker = buddy !== null && prefs.companion === 'lively' && !isAscii && rowsLeft >= 2 ? pipPose(buddy.mood, buddy.frame, e.props.bodyColumns - 2) : null
+    const ours = band(ui, l, activity, ledger, e.props.bodyColumns, { elapsedMs: elapsed, tokens: activity.tokens, tip, face: buddy?.face ?? null, pip: walker }, {
       panel: () => void openPanel($),
       menu: () => void toggleMenu($),
       copy: prefs.copy && ledger.lastReply !== '' ? () => copyText($, e, ledger.lastReply) : undefined,
@@ -870,7 +924,8 @@ export const register: Register = on => {
     const ui = elements($, e)
     // A long turn closes with what it did, for whoever looked away while it ran.
     const summary = (await readLedger($)).summaries[String(e.props.durationMs)]
-    const away = summary === undefined || summary.tools === 0 ? null : awayCard(ui, l, e.props.durationMs, summary)
+    const sitter = l.prefs.companion === 'lively' && !isAscii ? { ...pipPose('content', 1, 12), x: 2 } : null
+    const away = summary === undefined || summary.tools === 0 ? null : awayCard(ui, l, e.props.durationMs, summary, sitter)
     if (drawnByMod(next.trace) !== null) {
       return (
         <ui.Box flexDirection="column" marginBottom={1}>

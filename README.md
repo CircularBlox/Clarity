@@ -60,6 +60,23 @@ The status band, through one turn. It replaces the stock spinner while it is on.
 
 ![The status band cycling through Thinking, Reading, Editing, Running npm test, Writing and Ready, with the time, tokens, plan step and context](docs/previews/band.svg)
 
+Meet Pip, a small sprout who lives on clarity's boxes. It peeks over the status band and paces along it while Claude works, looks around while Claude thinks, hops with a `?` when Claude is waiting on you, and sinks down for a nap after five quiet minutes. The face at the start of the band follows along.
+
+![Pip peeking over the status band through a turn: looking around while thinking, walking during Read, Edit and npm test, hopping with a question mark while waiting, humming when done, then asleep](docs/previews/companion.gif)
+
+It sweats once a usage limit passes 80%, and ends up belly-up when Claude stops at one.
+
+![Pip sweating during a build near a usage limit, then belly-up when the limit is reached](docs/previews/limit.gif)
+
+In the session panel, Pip walks along the top of the Now box under a sky: clouds that drift while Claude works, stars at night, and five hearts for what is left of your usage limit. After a long turn it sits on the "While you were away" card.
+
+<table>
+<tr>
+<td width="46%"><img alt="The session panel: a greeting, drifting clouds and a sun by day, stars and a moon by night, Pip walking on the Now box, and five hearts for the usage limit" src="docs/previews/sky.gif"></td>
+<td><img alt="Pip sitting on the While you were away card, humming" src="docs/previews/away.png"></td>
+</tr>
+</table>
+
 Tool rows. Each tool is a badge in the colour of what it does. Calls made back to back fold into one strip, and a click opens it.
 
 ![Tool rows: Read and Grep badges, an Edit with +15 −3, three calls folded into one strip, and a failed test in a red box](docs/previews/tools.svg)
@@ -91,6 +108,7 @@ These previews are drawn from clarity's own output, rendered through Claude Code
 | Slash commands | Their output sits in a titled card. |
 | End of a turn | A rule with the time. After a turn over 45 seconds, a "While you were away" card with tool calls, files changed and failures. |
 | Status band | What Claude is doing, for how long, tokens written, the plan step, running agents, failures and context. It shows compaction with a timer, waits for your permission like it waits for your answers, and warns once a plan usage limit passes 80%, with when it resets. A turn that stops on an error says why, in red. During a long turn a short tip sits under it. Facts that do not fit drop out whole. |
+| Companion | Pip, a pixel-art sprout that walks on the band, the panel and the away card, and a face at the start of the band. Both show how things are going: thinking, busy, waiting on you, worried near a limit, stopped, content, asleep. The panel also gets a greeting, a sky that follows the time of day, and hearts for your usage limit. |
 | Session panel | Now, context and cost, the plan, changed files, failures, recent calls and your prompts. Click a prompt to copy it. Past eight prompts the list folds, with a button to show them all. A fast scroll glides instead of jumping. |
 
 Buttons are always in brackets, like `[ ⧉ copy ]`, and change when you point at them. Coloured words without brackets are labels.
@@ -106,12 +124,15 @@ Buttons are always in brackets, like `[ ⧉ copy ]`, and change when you point a
 | Look | line width | 70, 80, 100, 120, full |
 | Look | terminal font | leave, readable, large |
 | Look | tool rows | one line, full |
+| Look | companion | lively, face, off |
 | Layout | status band | on, off |
 | Layout | session panel | auto, off, open now |
 | Behaviour | alerts | notify, sound, both, off |
 | Behaviour | copy buttons | on, off |
 
 `symbols: ascii` swaps every symbol clarity draws (`▸`, `✓`, rounded borders) for plain ASCII, for terminals or fonts that show boxes instead.
+
+`companion: face` keeps the face and the sky but leaves Pip out, which saves the two rows Pip uses over the band. `off` puts the plain `●` and `✓` symbols back and takes the sky away. The hearts stay either way, since they are information. Pip also steps aside when the space above the prompt is short, and in `symbols: ascii`.
 
 `auto` colours follow your Claude Code theme. `colorblind` uses the Okabe–Ito set. `theme` uses only your theme's own colours, which suits light themes.
 

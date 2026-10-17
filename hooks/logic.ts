@@ -499,6 +499,8 @@ export function status(prefs: Prefs): string {
   return `on · colours ${prefs.palette} · tools ${prefs.tools} · focus ${prefs.isFocus ? 'on' : 'off'} · band ${prefs.band ? 'on' : 'off'} · alerts ${prefs.alerts}. ${HELP}`
 }
 
+export const COMPANIONS = ['lively', 'face', 'off'] as const
+
 export const DEFAULT_PREFS: Prefs = {
   isOn: true,
   isFocus: false,
@@ -511,6 +513,7 @@ export const DEFAULT_PREFS: Prefs = {
   copy: true,
   font: 'leave',
   icons: 'unicode',
+  companion: 'lively',
 }
 
 function oneOf<T>(list: readonly T[], value: unknown, fallback: T): T {
@@ -533,6 +536,8 @@ export function readPrefs(stored: unknown): Prefs {
     copy: bool(s.copy, DEFAULT_PREFS.copy),
     font: oneOf(FONTS, s.font, DEFAULT_PREFS.font),
     icons: oneOf(ICONS, s.icons, DEFAULT_PREFS.icons),
+    // An early beta kept this as on or off.
+    companion: s.companion === true ? 'lively' : s.companion === false ? 'off' : oneOf(COMPANIONS, s.companion, DEFAULT_PREFS.companion),
   }
 }
 
@@ -668,6 +673,7 @@ const ASCII: Record<string, string> = {
   '▸': '>', '▾': 'v', '▴': '^', '✓': '+', '✗': 'x', '●': '*', '⧉': '#', '▤': '#', '☰': '=',
   '━': '=', '─': '-', '│': '|', '↓': 'v', '…': '...', '⊘': '-', '▣': '#', '≡': '=', '○': 'o',
   '❯': '>', '▮': '|', '█': '#', '░': '.', '·': '-', '−': '-', '→': '->', '×': 'x', '⎿': '\\',
+  '•': 'o', '‿': '_', '♥': '*', '♡': '.', '☁': '~', '☀': 'O', '☾': 'C', '⋆': '*', '♪': '~',
 }
 const ASCII_RE = new RegExp(`[${Object.keys(ASCII).join('')}]`, 'g')
 
@@ -696,3 +702,157 @@ export function tipAt(elapsedMs: number): string | null {
 
 // How long the panel's prompt list is before it folds.
 export const PANEL_TURNS = 8
+
+// The companion: a small face in the band that shows how things are going. Each face has two
+// frames, swapped once a second while a turn runs, so it looks around, waves or works.
+const FACES = {
+  sleeping: ['(-.-)zz', '(-.-)zz'],
+  content: ['(^‿^)', '(^‿^)'],
+  thinking: ['(•.• )', '( •.•)'],
+  writing: ['(•‿•)_', '(•‿•)/'],
+  working: ['\\(•.•)', '(•.•)/'],
+  waiting: ['(•.•)?', '(-.-)?'],
+  tidying: ['(˘.˘)~', '(˘.˘) '],
+  worried: ['(•.•;)', '(;•.•)'],
+  stopped: ['(×_×)', '(×_×)'],
+} as const
+
+export type Mood = keyof typeof FACES
+
+// What the companion feels: work and waiting first, then worry near a usage limit,
+// and once idle for a while, sleep.
+export function moodOf(activity: Activity, ledger: Ledger, isResting: boolean): Mood {
+  const limit = ledger.limit?.percent ?? 0
+  if (activity.phase === 'idle') {
+    if (ledger.stopped !== null || limit >= 100) return 'stopped'
+    return isResting ? 'sleeping' : 'content'
+  }
+  if (activity.phase === 'waiting') return 'waiting'
+  if (activity.phase === 'compacting') return 'tidying'
+  if (limit >= 80) return 'worried'
+  if (activity.phase === 'thinking') return 'thinking'
+  return activity.phase === 'tool' ? 'working' : 'writing'
+}
+
+export function faceOf(mood: Mood, frame: number): string {
+  return FACES[mood][Math.abs(frame) % 2] ?? FACES[mood][0]
+}
+
+// After this long without a turn, the companion falls asleep.
+export const REST_MS = 5 * 60_000
+
+// What is left of a usage limit, as five hearts.
+export function hearts(percentUsed: number): { full: string; empty: string } {
+  const full = Math.max(0, Math.min(5, Math.ceil((100 - percentUsed) / 20)))
+  return { full: '♥'.repeat(full), empty: '♡'.repeat(5 - full) }
+}
+
+// The panel's sky: clouds by day, stars by night, and the sun or moon at the end. The clouds
+// drift a column a second while a turn runs, and the stars twinkle.
+export function sky(width: number, hour: number, frame: number): { clouds: string; body: string } {
+  const isNight = hour < 6 || hour >= 19
+  const span = Math.max(4, width - 3)
+  const row = Array.from({ length: span }, () => ' ')
+  if (isNight) {
+    for (let i = 0; i * 7 + 2 < span; i++) {
+      const at = (i * 7 + 2 + (i % 2) * 3) % span
+      row[at] = (i + frame) % 3 === 0 ? '⋆' : '·'
+    }
+  } else {
+    const shapes = ['☁☁', '☁', '☁☁☁']
+    shapes.forEach((shape, i) => {
+      const start = (((Math.floor((i * span) / shapes.length) + frame) % span) + span) % span
+      ;[...shape].forEach((ch, j) => {
+        if (ch !== ' ') row[(start + j) % span] = ch
+      })
+    })
+  }
+  return { clouds: row.join(''), body: isNight ? '☾' : '☀' }
+}
+
+export function greeting(hour: number): string {
+  if (hour >= 5 && hour < 12) return 'good morning'
+  if (hour >= 12 && hour < 17) return 'good afternoon'
+  if (hour >= 17 && hour < 23) return 'good evening'
+  return 'up late'
+}
+
+// Pip, the sprout who lives on clarity's boxes. It is drawn as pixel art: each grid is 8 pixels
+// wide and 6 tall, and each terminal cell holds two pixels, one above the other (▀ ▄ █), so
+// Pip stands 3 rows tall. `#` is its body, `e` its eyes, `b` its cheeks, `l` its leaf, `w` a
+// drop of sweat and `.` nothing.
+export type Pixel = 'body' | 'eye' | 'cheek' | 'leaf' | 'drop'
+export type PipCell = { ch: string; fg: Pixel | null; bg: Pixel | null }
+export type PipPose = { rows: PipCell[][]; x: number; bubble: string }
+
+const PIXELS: Record<string, Pixel> = { '#': 'body', e: 'eye', b: 'cheek', l: 'leaf', w: 'drop' }
+
+const PIP = {
+  standing: ['...ll...', '..####..', '.#e##e#.', '.#b##b#.', '..####..', '..#..#..'],
+  stepping: ['...ll...', '..####..', '.#e##e#.', '.#b##b#.', '..####..', '.#....#.'],
+  lookLeft: ['...ll...', '..####..', '.#e#e##.', '.#b##b#.', '..####..', '..#..#..'],
+  lookRight: ['...ll...', '..####..', '.##e#e#.', '.#b##b#.', '..####..', '..#..#..'],
+  blinking: ['...ll...', '..####..', '.######.', '.#b##b#.', '..####..', '..#..#..'],
+  cheering: ['...ll...', '#.####.#', '##e##e##', '.#b##b#.', '..####..', '........'],
+  worried: ['...ll...', '..####.w', '.#e##e#.', '.#b##b#.', '..####..', '..#..#..'],
+  worried2: ['...ll...', '..####..', '.#e##e#w', '.#b##b#.', '..####..', '..#..#..'],
+  sleeping: ['........', '........', '...ll...', '..####..', '.######.', '.#b##b#.'],
+  belly: ['..#..#..', '..####..', '.#b##b#.', '.#e##e#.', '..####..', '...ll...'],
+} as const
+
+export type PipFace = keyof typeof PIP
+
+// Pairs the pixel rows into cells. A cell with two different pixels draws the top one as the
+// glyph and the bottom one as its background.
+export function pipCells(grid: readonly string[], drop = 0): PipCell[][] {
+  const px = [...Array.from({ length: drop }, () => '........'), ...grid].slice(0, 6)
+  const cells: PipCell[][] = []
+  for (let y = 0; y < 6; y += 2) {
+    const top = px[y] ?? '........'
+    const bottom = px[y + 1] ?? '........'
+    const row: PipCell[] = []
+    for (let x = 0; x < 8; x++) {
+      const t = PIXELS[top[x] ?? '.'] ?? null
+      const b = PIXELS[bottom[x] ?? '.'] ?? null
+      if (t === null && b === null) row.push({ ch: ' ', fg: null, bg: null })
+      else if (t === b) row.push({ ch: '█', fg: t, bg: null })
+      else if (b === null) row.push({ ch: '▀', fg: t, bg: null })
+      else if (t === null) row.push({ ch: '▄', fg: b, bg: null })
+      else row.push({ ch: '▀', fg: t, bg: b })
+    }
+    cells.push(row)
+  }
+  return cells
+}
+
+// Where Pip is and what it does, for a mood, the second it is, and the room it has to walk in.
+// It paces while Claude works, hops when Claude waits on you, and stays put otherwise; the
+// spot it stopped at is where it rests, since the last tick keeps it there.
+export function pipPose(mood: Mood, frame: number, span: number): PipPose {
+  const room = Math.max(1, span - 9)
+  const lap = frame % (2 * room)
+  const paced = lap < room ? lap : 2 * room - lap
+  const isRight = lap < room
+  const at = (face: PipFace, x: number, bubble = '', drop = 0): PipPose => ({ rows: pipCells(PIP[face], drop), x, bubble })
+  const odd = frame % 2 === 1
+  switch (mood) {
+    case 'working':
+      return at(odd ? 'stepping' : isRight ? 'lookRight' : 'lookLeft', paced)
+    case 'writing':
+      return at(odd ? 'stepping' : 'standing', paced, odd ? '·' : '')
+    case 'tidying':
+      return at(odd ? 'stepping' : 'standing', paced, '~')
+    case 'thinking':
+      return at(odd ? 'lookRight' : 'lookLeft', paced, odd ? '°' : 'o')
+    case 'waiting':
+      return at(odd ? 'cheering' : 'standing', paced, '?', odd ? 0 : 1)
+    case 'worried':
+      return at(odd ? 'worried2' : 'worried', paced)
+    case 'stopped':
+      return at('belly', paced, '×')
+    case 'content':
+      return at(odd ? 'blinking' : 'cheering', paced, '♪')
+    case 'sleeping':
+      return at('sleeping', paced, odd ? 'z' : 'zz')
+  }
+}
