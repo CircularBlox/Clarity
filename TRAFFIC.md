@@ -4,10 +4,10 @@ Recorded since 2026-10-03. Updated 2026-10-16.
 
 | | All recorded days | Last 14 days |
 | --- | --- | --- |
-| Clones | 0 | 0 |
-| Unique cloners, summed by day | 0 | 0 |
-| Views | 0 | 0 |
-| Unique visitors, summed by day | 0 | 0 |
+| Clones | 61 | 61 |
+| Unique cloners, summed by day | 30 | 30 |
+| Views | 10 | 10 |
+| Unique visitors, summed by day | 2 | 2 |
 
 Unique counts are summed day by day, so someone who cloned on two days counts twice.
 
