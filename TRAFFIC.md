@@ -1,11 +1,11 @@
 # clarity traffic
 
-Recorded since 2026-10-03. Updated 2026-10-19.
+Recorded since 2026-10-03. Updated 2026-10-20.
 
 | | All recorded days | Last 14 days |
 | --- | --- | --- |
-| Clones | 154 | 154 |
-| Unique cloners, summed by day | 84 | 84 |
+| Clones | 173 | 173 |
+| Unique cloners, summed by day | 97 | 97 |
 | Views | 10 | 10 |
 | Unique visitors, summed by day | 2 | 2 |
 
