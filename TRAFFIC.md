@@ -1,13 +1,13 @@
 # clarity traffic
 
-Recorded since 2026-10-03. Updated 2026-11-08.
+Recorded since 2026-10-03. Updated 2026-11-09.
 
 | | All recorded days | Last 14 days |
 | --- | --- | --- |
-| Clones | 453 | 216 |
-| Unique cloners, summed by day | 255 | 120 |
-| Views | 13 | 2 |
-| Unique visitors, summed by day | 5 | 2 |
+| Clones | 468 | 203 |
+| Unique cloners, summed by day | 264 | 115 |
+| Views | 13 | 1 |
+| Unique visitors, summed by day | 5 | 1 |
 
 Unique counts are summed day by day, so someone who cloned on two days counts twice.
 
@@ -15,4 +15,4 @@ Unique counts are summed day by day, so someone who cloned on two days counts tw
 
 | Site | Views | Unique |
 | --- | --- | --- |
-| github.com | 1 | 1 |
+| none yet | | |
